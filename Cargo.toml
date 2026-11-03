@@ -4,12 +4,13 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-twilight-gateway = "0.16"
-twilight-http = "0.16"
-twilight-model = "0.16"
-twilight-util = { version = "0.16", features = ["builder"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+twilight-gateway = "0.18.0"
+twilight-http = "0.18.0"
+twilight-model = "0.18.0"
+twilight-util = { version = "0.18.0", features = ["builder"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 mimalloc = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [profile.release]
 opt-level = 3
