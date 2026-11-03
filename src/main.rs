@@ -4,7 +4,7 @@ use std::{
 
 use tokio::sync::mpsc;
 use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt as _};
-use twilight_http::{error::ErrorType, Client};
+use twilight_http::{Client, error::ErrorType, request::channel::message};
 use twilight_model::{
   application::{
     command::CommandType,
@@ -170,7 +170,27 @@ async fn scheduler(http: Arc<Client>, mut rx: mpsc::UnboundedReceiver<Job>) {
 }
 
 async fn delete_all(http: Arc<Client>, due: Vec<(Id<ChannelMarker>, Id<MessageMarker>)>) {
-  for (channel, message) in due {
+  let cutoff = now_ms().saturating_sub(1123200000);
+  let mut by_channel: HashMap<Id<ChannelMarker>, Vec<Id<MessageMarker>>> = HashMap::new();
+  for (c, m) in due {
+    by_channel.entry(c).or_default().push(m);
+  }
+  for (channel, ids) in by_channel {
+    let (fresh, old): (Vec<_>, Vec<_>) = ids
+      .into_iter()
+      .partition(|m| snowflake_ms(m.get()) > cutoff);
+    for chunk in fresh.chunks(100) {
+      if chunk.len() > 1 && http.delete_messages(channel, chunk).await.is_ok() {
+        continue;
+      }
+      delete_each(&http, channel, chunk).await;
+    }
+    delete_each(&http, channel, &old).await;
+  }
+}
+
+async fn delete_each(http: &Client, channel: Id<ChannelMarker>, ids: &[Id<MessageMarker>]) {
+  for &message in ids {
     if let Err(err) = http.delete_message(channel, message).await {
       let gone = matches!(err.kind(), ErrorType::Response { status, .. } if status.get() == 404);
       if !gone {
