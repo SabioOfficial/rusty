@@ -337,13 +337,15 @@ async fn main() -> Result<(), BoxErr> {
           let at = snowflake_ms(msg.id.get()) + secs * 1000;
           let _ = state.tx.send((at, msg.channel_id, msg.id));
         }
-        let http = Arc::clone(&http);
-        let state = Arc::clone(&state);
-        tokio::spawn(async move {
-          if let Err(err) = handle_message(http, state, msg).await {
-            eprintln!("message handler error: {err}");
-          }
-        });
+        if !msg.author.bot && msg.guild_id.is_some() && msg.mentions.iter().any(|m| m.id == state.bot_id) {
+          let http = Arc::clone(&http);
+          let state = Arc::clone(&state);
+          tokio::spawn(async move {
+            if let Err(err) = handle_message(http, state, msg).await {
+              eprintln!("message handler error: {err}");
+            }
+          });
+        }
       }
       _ => {}
     }
