@@ -11,6 +11,7 @@ twilight-util = { version = "0.18.0", features = ["builder"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 mimalloc = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+dotenvy = "0.15"
 
 [profile.release]
 opt-level = 3

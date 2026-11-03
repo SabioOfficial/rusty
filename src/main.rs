@@ -229,6 +229,8 @@ async fn main() -> Result<(), BoxErr> {
     .install_default()
     .expect("failed to install rustls crypto provider");
 
+  dotenvy::dotenv().ok();
+
   let token = env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN not set");
   let http = Arc::new(Client::new(token.clone()));
 
