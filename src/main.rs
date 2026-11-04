@@ -4,27 +4,26 @@ use std::{
 
 use tokio::sync::mpsc;
 use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt as _};
-use twilight_http::{Client, error::ErrorType, request::channel::message};
+use twilight_http::{Client, error::ErrorType};
 use twilight_model::{
   application::{
-    command::CommandType,
-    interaction::{
-      application_command::{CommandData, CommandOptionValue},
-      InteractionData,
+    command::CommandType, interaction::{
+      InteractionData, application_command::{CommandData, CommandDataOption, CommandOptionValue},
     },
-  },
-  channel::message::{AllowedMentions, MessageFlags},
-  gateway::payload::incoming::{InteractionCreate, MessageCreate},
-  guild::Permissions,
-  http::interaction::{InteractionResponse, InteractionResponseType},
-  id::{
-    marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
-    Id,
+    }, channel::{
+    ChannelType, message::{AllowedMentions, MessageFlags},
+    permission_overwrite::{
+      PermissionOverwrite as ChannelOverwrite, PermissionOverwriteType as ChannelOverwriteType,
+    },
+  }, gateway::payload::incoming::{InteractionCreate, MessageCreate}, guild::Permissions, http::{
+    interaction::{InteractionResponse, InteractionResponseType},
+    permission_overwrite::{PermissionOverwrite, PermissionOverwriteType},
+  }, id::{
+    Id, marker::{ChannelMarker, GenericMarker, GuildMarker, MessageMarker, UserMarker},
   },
 };
 use twilight_util::builder::{
-  command::{CommandBuilder, IntegerBuilder, StringBuilder, SubCommandBuilder, UserBuilder},
-  InteractionResponseDataBuilder,
+  InteractionResponseDataBuilder, command::{ChannelBuilder, CommandBuilder, IntegerBuilder, StringBuilder, SubCommandBuilder, SubCommandGroupBuilder, UserBuilder},
 };
 
 #[global_allocator]
@@ -35,6 +34,13 @@ type BoxErr = Box<dyn Error + Send + Sync>;
 type Job = (u64, Id<ChannelMarker>, Id<MessageMarker>);
 
 #[derive(Clone, Copy)]
+
+struct PrivateVc {
+  owner: Id<UserMarker>,
+  expires_ms: u64,
+}
+
+#[derive(Clone, Copy)]
 struct Disappear {
   secs: u64,
   since_ms: u64,
@@ -43,6 +49,7 @@ struct Disappear {
 struct State {
   redirects: RwLock<HashMap<Id<GuildMarker>, Id<UserMarker>>>,
   disappear: RwLock<HashMap<Id<ChannelMarker>, Disappear>>,
+  vcs: RwLock<HashMap<Id<ChannelMarker>, PrivateVc>>,
   tx: mpsc::UnboundedSender<Job>,
   bot_id: Id<UserMarker>,
 }
@@ -204,8 +211,8 @@ async fn catch_up(http: Arc<Client>, tx: mpsc::UnboundedSender<Job>, channel: Id
   let mut before: Option<Id<MessageMarker>> = None;
   loop {
     let resp = match before {
-      Some(b) => http.channel_messages(channel).before(b).await,
-      None => http.channel_messages(channel).await,
+      Some(b) => http.channel_messages(channel).before(b).limit(100).await,
+      None => http.channel_messages(channel).limit(100).await,
     };
     let msgs = match resp {
       Ok(resp) => match resp.models().await {
@@ -237,7 +244,7 @@ async fn catch_up(http: Arc<Client>, tx: mpsc::UnboundedSender<Job>, channel: Id
       }
       let _ = tx.send((created + cfg.secs * 1000, channel, m.id));
     }
-    if reached_setup || msgs.len() < 50 {
+    if reached_setup || msgs.len() < 100 {
       return;
     }
   }
@@ -291,8 +298,40 @@ async fn main() -> Result<(), BoxErr> {
   )
   .option(SubCommandBuilder::new("off", "Stop deleting messages in this channel"))
   .build();
+  let vc_opt = || {
+    ChannelBuilder::new("vc", "The private voice channel")
+      .channel_types([ChannelType::GuildVoice])
+      .required(true)
+  };
+  let private_vc = CommandBuilder::new(
+    "create-private-vc",
+    "Create and manage temporary private voice channels",
+    CommandType::ChatInput,
+  )
+  .option(
+    SubCommandBuilder::new("setup", "Create a private voice channel")
+      .option(StringBuilder::new("name", "Channel name").required(true).max_length(100))
+      .option(IntegerBuilder::new("amount", "How many units until it auto-deletes").required(true).min_value(1))
+      .option(
+        StringBuilder::new("unit", "Unit of time")
+          .required(true)
+          .choices([("Minutes", "minutes"), ("Hours", "hours"), ("Days", "days")]), 
+      ),
+  )
+  .option(
+    SubCommandGroupBuilder::new("modify", "Modify one of your private voice channels").subcommands([
+      SubCommandBuilder::new("users-add", "Invite a user (they get a DM)")
+        .option(vc_opt())
+        .option(UserBuilder::new("user", "Who to invite").required(true)),
+      SubCommandBuilder::new("users-transfer", "Transfer ownership to another user")
+        .option(vc_opt())
+        .option(UserBuilder::new("user", "New owner").required(true)),
+      SubCommandBuilder::new("close", "Delete the voice channel now").option(vc_opt()),
+    ]),
+  )
+  .build();
   http.interaction(app.id)
-    .set_global_commands(&[boom, redirect, disappearing])
+    .set_global_commands(&[boom, redirect, disappearing, private_vc])
     .await?;
 
   let me = http.current_user().await?.model().await?;
@@ -301,6 +340,7 @@ async fn main() -> Result<(), BoxErr> {
   let state = Arc::new(State {
     redirects: RwLock::new(load_redirects()),
     disappear: RwLock::new(load_disappear()),
+    vcs: RwLock::new(load_vcs()),
     tx,
     bot_id: me.id,
   });
@@ -345,6 +385,16 @@ async fn main() -> Result<(), BoxErr> {
         for (channel, cfg) in channels {
           tokio::spawn(catch_up(Arc::clone(&http), state.tx.clone(), channel, cfg));
         }
+        let vcs: Vec<_> = state
+          .vcs
+          .read()
+          .unwrap()
+          .iter()
+          .map(|(c, v)| (*c, v.expires_ms))
+          .collect();
+        for (channel, expires_ms) in vcs {
+          spawn_vc_timer(Arc::clone(&http), Arc::clone(&state), channel, expires_ms);
+        }
       }
       Event::MessageCreate(msg) => {
         let secs = state
@@ -383,6 +433,9 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
   }
   if cmd.name == "disappearing" {
     return handle_disappearing(&http, &state, &ev, cmd).await;
+  }
+  if cmd.name == "create-private-vc" {
+    return handle_private_vc(&http, &state, &ev, cmd).await;
   }
   if cmd.name != "boom" {
     return Ok(());
@@ -567,4 +620,260 @@ async fn handle_disappearing(http: &Arc<Client>, state: &State, ev: &Interaction
     .create_response(ev.id, &ev.token, &response)
     .await?;
   Ok(())
+}
+
+fn opt_str<'a>(opts: &'a [CommandDataOption], name: &str) -> Option<&'a str> {
+  opts.iter().find_map(|o| match &o.value {
+    CommandOptionValue::String(s) if o.name == name => Some(s.as_str()),
+    _ => None,
+  })
+}
+
+fn opt_int(opts: &[CommandDataOption], name: &str) -> Option<i64> {
+  opts.iter().find_map(|o| match &o.value {
+    CommandOptionValue::Integer(n) if o.name == name => Some(*n),
+    _ => None,
+  })
+}
+
+fn opt_user(opts: &[CommandDataOption], name: &str) -> Option<Id<UserMarker>> {
+  opts.iter().find_map(|o| match &o.value {
+    CommandOptionValue::User(id) if o.name == name => Some(*id),
+    _ => None,
+  })
+}
+
+fn opt_channel(opts: &[CommandDataOption], name: &str) -> Option<Id<ChannelMarker>> {
+  opts.iter().find_map(|o| match &o.value {
+    CommandOptionValue::Channel(id) if o.name == name => Some(*id),
+    _ => None,
+  })
+}
+
+fn load_vcs() -> HashMap<Id<ChannelMarker>, PrivateVc> {
+  let mut map = HashMap::new();
+  if let Ok(text) = std::fs::read_to_string("private_vcs.txt") {
+    for line in text.lines() {
+      let mut p = line.split_whitespace();
+      if let (Some(c), Some(o), Some(t)) = (p.next(), p.next(), p.next()) {
+        if let (Ok(c), Ok(o), Ok(expires_ms)) = (c.parse::<u64>(), o.parse::<u64>(), t.parse::<u64>()) {
+          if let (Some(c), Some(owner)) = (Id::new_checked(c), Id::new_checked(o)) {
+            map.insert(c, PrivateVc { owner, expires_ms });
+          }
+        }
+      }
+    }
+  }
+  map
+}
+
+fn save_vcs(map: &HashMap<Id<ChannelMarker>, PrivateVc>) {
+  let text: String = map
+    .iter()
+    .map(|(c, v)| format!("{} {} {}\n", c.get(), v.owner.get(), v.expires_ms))
+    .collect();
+  if let Err(err) = std::fs::write("private_vcs.txt", text) {
+    eprintln!("failed to save private_vcs.txt: {err}");
+  }
+}
+
+fn spawn_vc_timer(http: Arc<Client>, state: Arc<State>, channel: Id<ChannelMarker>, expires_ms: u64) {
+  tokio::spawn(async move {
+    tokio::time::sleep(Duration::from_millis(expires_ms.saturating_sub(now_ms()))).await;
+    let still_tracked = state.vcs.read().unwrap().contains_key(&channel);
+    if still_tracked {
+      delete_vc(&http, &state, channel).await;
+    }
+  });
+}
+
+async fn delete_vc(http: &Client, state: &State, channel: Id<ChannelMarker>) {
+  let removable = match http.delete_channel(channel).await {
+    Ok(_) => true,
+    Err(err) => {
+      let gone = matches!(err.kind(), ErrorType::Response { status, .. } if status.get() == 404);
+      if !gone {
+        eprintln!("failed to delete private vc {channel}: {err}");
+      }
+      gone
+    }
+  };
+  if removable {
+    let mut map = state.vcs.write().unwrap();
+    map.remove(&channel);
+    save_vcs(&map);
+  }
+}
+
+async fn allow_member(http: &Client, channel: Id<ChannelMarker>, user: Id<UserMarker>) -> Result<(), BoxErr> {
+  http.update_channel_permission(
+    channel,
+    &PermissionOverwrite {
+      allow: Some(Permissions::VIEW_CHANNEL.union(Permissions::CONNECT).union(Permissions::SPEAK)),
+      deny: None,
+      id: user.cast(),
+      kind: PermissionOverwriteType::Member,
+    },
+  )
+  .await?;
+  Ok(())
+}
+
+async fn send_dm(http: &Client, user: Id<UserMarker>, text: &str) -> Result<(), BoxErr> {
+  let dm = http.create_private_channel(user).await?.model().await?;
+  http.create_message(dm.id).content(text).await?;
+  Ok(())
+}
+
+async fn handle_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
+  let iclient = http.interaction(ev.application_id);
+  let ack = InteractionResponse {
+    kind: InteractionResponseType::DeferredChannelMessageWithSource,
+    data: Some(InteractionResponseDataBuilder::new().flags(MessageFlags::EPHEMERAL).build()),
+  };
+  iclient.create_response(ev.id, &ev.token, &ack).await?;
+
+  let text = match run_private_vc(http, state, ev, cmd).await {
+    Ok(t) => t,
+    Err(err) => {
+      eprintln!("private vc error: {err}");
+      "Something went wrong. Make sure I have Manage Channels and Manage Roles permissions.".to_string()
+    }
+  };
+  iclient.update_response(&ev.token).content(Some(&text)).await?;
+  Ok(())
+}
+
+async fn run_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, cmd: &CommandData) -> Result<String, BoxErr> {
+  let (Some(guild_id), Some(author)) = (ev.guild_id, ev.author_id()) else {
+    return Ok("Use `/create-private-vc` in a server.".into());
+  };
+  let Some(top) = cmd.options.first() else {
+    return Ok("Missing subcommand.".into());
+  };
+
+  match &top.value {
+    CommandOptionValue::SubCommand(opts) if top.name == "setup" => {
+      let name = opt_str(opts, "name").unwrap_or("private-vc").trim();
+      let len = name.chars().count();
+      if len == 0 || len > 100 {
+        return Ok("The name must be 1-100 characters.".into());
+      }
+      let secs = match (opt_int(opts, "amount"), opt_str(opts, "unit").and_then(unit_secs)) {
+        (Some(n), Some(mult)) if n >= 1 => (n as u64).checked_mul(mult),
+        _ => None,
+      };
+      let Some(secs) = secs else {
+        return Ok("Pick an amount of 1 or more and a unit".into());
+      };
+      if secs > 604800 {
+        return Ok("That's too long. The maximum is 7 days.".into());
+      }
+      let owned = state.vcs.read().unwrap().values().filter(|v| v.owner == author).count();
+      if owned >= 3 {
+        return Ok(format!("You already own 3 private VCs. Close one first."));
+      }
+
+      let everyone: Id<GenericMarker> = guild_id.cast();
+      let overwrites = [
+        ChannelOverwrite {
+          allow: Permissions::empty(),
+          deny: Permissions::VIEW_CHANNEL | Permissions::CONNECT,
+          id: everyone,
+          kind: ChannelOverwriteType::Role,
+        },
+        ChannelOverwrite {
+          allow: Permissions::VIEW_CHANNEL.union(Permissions::CONNECT).union(Permissions::SPEAK),
+          deny: Permissions::empty(),
+          id: author.cast(),
+          kind: ChannelOverwriteType::Member,
+        },
+        ChannelOverwrite {
+          allow: Permissions::VIEW_CHANNEL | Permissions::MANAGE_CHANNELS,
+          deny: Permissions::empty(),
+          id: state.bot_id.cast(),
+          kind: ChannelOverwriteType::Member,
+        },
+      ];
+      let channel = http
+        .create_guild_channel(guild_id, name)
+        .kind(ChannelType::GuildVoice)
+        .permission_overwrites(&overwrites)
+        .await?
+        .model()
+        .await?;
+
+      let expires_ms = now_ms() + secs * 1000;
+      {
+        let mut map = state.vcs.write().unwrap();
+        map.insert(channel.id, PrivateVc { owner: author, expires_ms });
+        save_vcs(&map);
+      }
+      spawn_vc_timer(Arc::clone(http), Arc::clone(state), channel.id, expires_ms);
+      Ok(format!(
+        "Created <#{}>. Only you can join. Invite people with `/create-private-vc modify users-add`. It auto-deletes <t:{}:R>.",
+        channel.id,
+        expires_ms / 1000
+      ))
+    }
+    CommandOptionValue::SubCommandGroup(subs) if top.name == "modify" => {
+      let Some(sub) = subs.first() else {
+        return Ok("Missing subcommand.".into());
+      };
+      let CommandOptionValue::SubCommand(opts) = &sub.value else {
+        return Ok("Missing subcommand.".into());
+      };
+      let Some(channel) = opt_channel(opts, "vc") else {
+        return Ok("Pick a video channel.".into());
+      };
+      let vc = state.vcs.read().unwrap().get(&channel).copied();
+      let Some(vc) = vc else {
+        return Ok("That isn't a private VC I manage.".into());
+      };
+      if vc.owner != author {
+        return Ok("Only the owner of that VC can modify it.".into());
+      }
+
+      match sub.name.as_str() {
+        "users-add" => {
+          let Some(target) = opt_user(opts, "user") else {
+            return Ok("Pick a user.".into());
+          };
+          if target == author || target == state.bot_id {
+            return Ok("You can't pick this user.".into());
+          }
+          allow_member(http, channel, target).await?;
+          let dm = format!("You've been invited by <@{author}> to join the private voice channel <#{channel}>.");
+          if send_dm(http, target, &dm).await.is_ok() {
+            Ok(format!("Added <@{target}> to <#{channel}> and sent them a DM."))
+          } else {
+            Ok(format!("Added <@{target}> to <#{channel}>, but I couldn't DM them (their DMs may be closed)."))
+          }
+        }
+        "users-transfer" => {
+          let Some(target) = opt_user(opts, "user") else {
+            return Ok("Pick a user.".into());
+          };
+          if target == author || target == state.bot_id {
+            return Ok("Pick someone else.".into());
+          }
+          allow_member(http, channel, target).await?;
+          {
+            let mut map = state.vcs.write().unwrap();
+            if let Some(v) = map.get_mut(&channel) {
+              v.owner = target;
+            }
+            save_vcs(&map);
+          }
+          Ok(format!("<@{target}> now owns <#{channel}>. You keep access but can no longer modify it."))
+        }
+        "close" => {
+          delete_vc(http, state, channel).await;
+          Ok("Closed the private VC.".into())
+        }
+        _ => Ok("Unknown subcommand.".into()),
+      }
+    }
+    _ => Ok("Unknown subcommand.".into()),
+  }
 }
