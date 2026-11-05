@@ -9,15 +9,18 @@ use twilight_model::{
   application::{
     command::CommandType, interaction::{
       InteractionData, application_command::{CommandData, CommandDataOption, CommandOptionValue},
+      modal::{ModalInteractionComponent, ModalInteractionData},
     },
     }, channel::{
-    ChannelType, message::{AllowedMentions, MessageFlags},
+    ChannelType, message::{
+      AllowedMentions, MessageFlags,
+      component::{Component, Label, TextInput, TextInputStyle},
+    },
     permission_overwrite::{
       PermissionOverwrite as ChannelOverwrite, PermissionOverwriteType as ChannelOverwriteType,
     },
   }, gateway::payload::incoming::{InteractionCreate, MessageCreate}, guild::Permissions, http::{
-    interaction::{InteractionResponse, InteractionResponseType},
-    permission_overwrite::{PermissionOverwrite, PermissionOverwriteType},
+    interaction::{InteractionResponse, InteractionResponseType}, permission_overwrite::{PermissionOverwrite, PermissionOverwriteType},
   }, id::{
     Id, marker::{ChannelMarker, GenericMarker, GuildMarker, MessageMarker, UserMarker},
   },
@@ -213,6 +216,7 @@ async fn repost_anchor(http: &Client, state: &State, channel: Id<ChannelMarker>)
   let sent = http
     .create_message(channel)
     .content(&text)
+    .flags(MessageFlags::SUPPRESS_NOTIFICATIONS)
     .allowed_mentions(Some(&no_pings))
     .await?
     .model()
@@ -459,10 +463,7 @@ async fn main() -> Result<(), BoxErr> {
     CommandType::ChatInput,
   )
   .default_member_permissions(Permissions::MANAGE_MESSAGES)
-  .option(
-    SubCommandBuilder::new("setup", "Anchor a message (use \\n for a line break)")
-      .option(StringBuilder::new("text", "What the anchored message says").required(true).max_length(2000)),
-  )
+  .option(SubCommandBuilder::new("setup", "Anchor a message to this channel"))
   .option(SubCommandBuilder::new("off", "Remove the anchored message from this channel"))
   .build();
   http.interaction(app.id)
@@ -564,6 +565,12 @@ async fn main() -> Result<(), BoxErr> {
 }
 
 async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>, received: Instant, received_wall: SystemTime, gateway_latency: Option<Duration>) -> Result<(), BoxErr> {
+  if let Some(InteractionData::ModalSubmit(modal)) = &ev.data {
+    if modal.custom_id == "anchor-setup" {
+      return handle_anchor_modal(&http, &state, &ev, modal).await;
+    }
+    return Ok(());
+  }
   let Some(InteractionData::ApplicationCommand(cmd)) = &ev.data else {
     return Ok(());
   };
@@ -764,28 +771,39 @@ async fn handle_disappearing(http: &Arc<Client>, state: &State, ev: &Interaction
 async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
   let channel = ev.channel.as_ref().map(|c| c.id);
   let sub = cmd.options.first();
-  let mut post = false;
 
   let text = match (sub, channel) {
-    (Some(sub), Some(channel)) if sub.name == "setup" => {
-      let body = match &sub.value {
-        CommandOptionValue::SubCommand(o) => opt_str(o, "text"),
-        _ => None,
+    (Some(sub), Some(_channel)) if sub.name == "setup" => {
+      let input = TextInput {
+        custom_id: "text".into(),
+        id: None,
+        label: None,
+        style: TextInputStyle::Paragraph,
+        placeholder: Some("Powered by Rusty, an open-source and locally hosted Discord bot system powered by Rust!".into()),
+        min_length: Some(1),
+        max_length: Some(2000),
+        required: Some(true),
+        value: None,
       };
-      match body {
-        Some(b) if !b.trim().is_empty() => {
-          let body = b.replace("\\n", "\n");
-          {
-            let mut map = state.anchors.write().unwrap();
-            let last = map.get(&channel).and_then(|a| a.last);
-            map.insert(channel, Anchor { text: body, last, tick: 0 });
-            save_anchors(&map);
-          }
-          post = true;
-          format!("Anchored in <#{channel}>. It will stay at the bottom.")
-        }
-        _ => "Give me some text to anchor.".to_string(),
-      }
+      let response = InteractionResponse {
+        kind: InteractionResponseType::Modal,
+        data: Some(
+          InteractionResponseDataBuilder::new()
+            .custom_id("anchor-setup")
+            .title("Set anchor message")
+            .components([Component::Label(Label {
+              id: None,
+              label: "Anchored message".into(),
+              description: None,
+              component: Box::new(Component::TextInput(input)),
+            })])
+            .build(),
+        ),
+      };
+      http.interaction(ev.application_id)
+        .create_response(ev.id, &ev.token, &response)
+        .await?;
+      return Ok(());
     }
     (Some(sub), Some(channel)) if sub.name == "off" => {
       let removed = {
@@ -802,12 +820,43 @@ async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionC
     _ => "Use `/anchor` in a server channel.".to_string(),
   };
 
-  reply_ephemeral(http, ev, text).await?;
+  reply_ephemeral(http, ev, text).await
+}
 
-  if let (true, Some(channel)) = (post, channel) {
-    if let Err(err) = repost_anchor(http, state, channel).await {
-      eprintln!("initial anchor post failed in {channel}: {err}");
-    }
+fn modal_text<'a>(c: &'a ModalInteractionComponent, id: &str) -> Option<&'a str> {
+  match c {
+    ModalInteractionComponent::TextInput(t) if t.custom_id == id => Some(t.value.as_str()),
+    ModalInteractionComponent::Label(l) => modal_text(&l.component, id),
+    ModalInteractionComponent::ActionRow(r) => r.components.iter().find_map(|c| modal_text(c, id)),
+    _ => None,
+  }
+}
+
+async fn handle_anchor_modal(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, modal: &ModalInteractionData) -> Result<(), BoxErr> {
+  let Some(channel) = ev.channel.as_ref().map(|c| c.id) else {
+    return Ok(());
+  };
+  let body = modal
+    .components
+    .iter()
+    .find_map(|c| modal_text(c, "text"))
+    .unwrap_or_default()
+    .to_string();
+
+  if body.trim().is_empty() {
+    return reply_ephemeral(http, ev, "Give me some text to anchor.".into()).await;
+  }
+
+  {
+    let mut map = state.anchors.write().unwrap();
+    let last = map.get(&channel).and_then(|a| a.last);
+    map.insert(channel, Anchor { text: body, last, tick: 0 });
+    save_anchors(&map);
+  }
+  reply_ephemeral(http, ev, format!("Anchored in <#{channel}>. It will stay at the bottom.")).await?;
+
+  if let Err(err) = repost_anchor(http, state, channel).await {
+    eprintln!("initial anchor post failed in {channel}: {err}");
   }
   Ok(())
 }
