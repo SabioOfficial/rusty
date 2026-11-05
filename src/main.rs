@@ -46,10 +46,18 @@ struct Disappear {
   since_ms: u64,
 }
 
+#[derive(Clone)]
+struct Anchor {
+  text: String,
+  last: Option<Id<MessageMarker>>,
+  tick: u64,
+}
+
 struct State {
   redirects: RwLock<HashMap<Id<GuildMarker>, Id<UserMarker>>>,
   disappear: RwLock<HashMap<Id<ChannelMarker>, Disappear>>,
   vcs: RwLock<HashMap<Id<ChannelMarker>, PrivateVc>>,
+  anchors: RwLock<HashMap<Id<ChannelMarker>, Anchor>>,
   tx: mpsc::UnboundedSender<Job>,
   bot_id: Id<UserMarker>,
 }
@@ -144,6 +152,121 @@ fn save_disappear(map: &HashMap<Id<ChannelMarker>, Disappear>) {
   if let Err(err) = std::fs::write("disappear.txt", text) {
     eprintln!("failed to save disappear.txt: {err}");
   }
+}
+
+fn unescape(s: &str) -> String {
+  let mut out = String::new();
+  let mut it = s.chars();
+  while let Some(ch) = it.next() {
+    if ch == '\\' {
+      match it.next() {
+        Some('n') => out.push('\n'),
+        Some(other) => out.push(other),
+        None => {}
+      }
+    } else {
+      out.push(ch);
+    }
+  }
+  out
+}
+
+fn load_anchors() -> HashMap<Id<ChannelMarker>, Anchor> {
+  let mut map = HashMap::new();
+  if let Ok(text) = std::fs::read_to_string("anchors.txt") {
+    for line in text.lines() {
+      let mut p = line.splitn(3, ' ');
+      if let (Some(c), Some(l), Some(body)) = (p.next(), p.next(), p.next()) {
+        if let (Ok(c), Ok(l)) = (c.parse::<u64>(), l.parse::<u64>()) {
+          if let Some(c) = Id::new_checked(c) {
+            map.insert(c, Anchor { text: unescape(body), last: Id::new_checked(l), tick: 0 });
+          }
+        }
+      }
+    }
+  }
+  map
+}
+
+fn save_anchors(map: &HashMap<Id<ChannelMarker>, Anchor>) {
+  let text: String = map
+    .iter()
+    .map(|(c, a)| {
+      let body = a.text.replace('\\', "\\\\").replace('\n', "\\n");
+      format!("{} {} {}\n", c.get(), a.last.map(|m| m.get()).unwrap_or(0), body)
+    })
+    .collect();
+  if let Err(err) = std::fs::write("anchors.txt", text) {
+    eprintln!("failed to save anchors.txt: {err}");
+  }
+}
+
+fn is_gone(err: &twilight_http::Error) -> bool {
+  matches!(err.kind(), ErrorType::Response { status, .. } if status.get() == 404)
+}
+
+async fn repost_anchor(http: &Client, state: &State, channel: Id<ChannelMarker>) -> Result<(), BoxErr> {
+  let Some(Anchor { text, last, .. }) = state.anchors.read().unwrap().get(&channel).cloned() else {
+    return Ok(());
+  };
+  let no_pings = AllowedMentions::default();
+  let sent = http
+    .create_message(channel)
+    .content(&text)
+    .allowed_mentions(Some(&no_pings))
+    .await?
+    .model()
+    .await?;
+  {
+    let mut map = state.anchors.write().unwrap();
+    if let Some(a) = map.get_mut(&channel) {
+      a.last = Some(sent.id);
+    }
+    save_anchors(&map);
+  }
+  if let Some(old) = last {
+    if let Err(err) = http.delete_message(channel, old).await {
+      if !is_gone(&err) {
+        eprintln!("couldn't delete old anchor in {channel}: {err}");
+      }
+    }
+  }
+  Ok(())
+}
+
+fn bump_anchor(http: Arc<Client>, state: Arc<State>, channel: Id<ChannelMarker>) {
+  let tick = {
+    let mut map = state.anchors.write().unwrap();
+    let Some(a) = map.get_mut(&channel) else { return };
+    a.tick += 1;
+    a.tick
+  };
+  tokio::spawn(async move {
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let current = state.anchors.read().unwrap().get(&channel).map(|a| a.tick);
+    if current == Some(tick) {
+      if let Err(err) = repost_anchor(&http, &state, channel).await {
+        eprintln!("anchor repost failed in {channel}: {err}");
+      }
+    }
+  });
+}
+
+async fn reply_ephemeral(http: &Client, ev: &InteractionCreate, text: String) -> Result<(), BoxErr> {
+  let response = InteractionResponse {
+    kind: InteractionResponseType::ChannelMessageWithSource,
+    data: Some(
+      InteractionResponseDataBuilder::new()
+        .content(text)
+        .flags(MessageFlags::EPHEMERAL)
+        .allowed_mentions(AllowedMentions::default())
+        .build(),
+    ),
+  };
+  http.interaction(ev.application_id)
+    .create_response(ev.id, &ev.token, &response)
+    .await?;
+  Ok(())
 }
 
 async fn scheduler(http: Arc<Client>, mut rx: mpsc::UnboundedReceiver<Job>) {
@@ -330,8 +453,20 @@ async fn main() -> Result<(), BoxErr> {
     ]),
   )
   .build();
+  let anchor = CommandBuilder::new(
+    "anchor",
+    "Keep a message at the bottom of the channel",
+    CommandType::ChatInput,
+  )
+  .default_member_permissions(Permissions::MANAGE_MESSAGES)
+  .option(
+    SubCommandBuilder::new("setup", "Anchor a message (use \\n for a line break)")
+      .option(StringBuilder::new("text", "What the anchored message says").required(true).max_length(2000)),
+  )
+  .option(SubCommandBuilder::new("off", "Remove the anchored message from this channel"))
+  .build();
   http.interaction(app.id)
-    .set_global_commands(&[boom, redirect, disappearing, private_vc])
+    .set_global_commands(&[boom, redirect, disappearing, private_vc, anchor])
     .await?;
 
   let me = http.current_user().await?.model().await?;
@@ -341,6 +476,7 @@ async fn main() -> Result<(), BoxErr> {
     redirects: RwLock::new(load_redirects()),
     disappear: RwLock::new(load_disappear()),
     vcs: RwLock::new(load_vcs()),
+    anchors: RwLock::new(load_anchors()),
     tx,
     bot_id: me.id,
   });
@@ -407,6 +543,9 @@ async fn main() -> Result<(), BoxErr> {
           let at = snowflake_ms(msg.id.get()) + secs * 1000;
           let _ = state.tx.send((at, msg.channel_id, msg.id));
         }
+        if msg.author.id != state.bot_id && state.anchors.read().unwrap().contains_key(&msg.channel_id) {
+          bump_anchor(Arc::clone(&http), Arc::clone(&state), msg.channel_id);
+        }
         if !msg.author.bot && msg.guild_id.is_some() && msg.mentions.iter().any(|m| m.id == state.bot_id) {
           let http = Arc::clone(&http);
           let state = Arc::clone(&state);
@@ -430,12 +569,12 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
   };
   if cmd.name == "person-redirect" {
     return handle_person_redirect(&http, &state, &ev, cmd).await;
-  }
-  if cmd.name == "disappearing" {
+  } else if cmd.name == "disappearing" {
     return handle_disappearing(&http, &state, &ev, cmd).await;
-  }
-  if cmd.name == "create-private-vc" {
+  } else if cmd.name == "create-private-vc" {
     return handle_private_vc(&http, &state, &ev, cmd).await;
+  } else if cmd.name == "anchor" {
+    return handle_anchor(&http, &state, &ev, cmd).await;
   }
   if cmd.name != "boom" {
     return Ok(());
@@ -619,6 +758,57 @@ async fn handle_disappearing(http: &Arc<Client>, state: &State, ev: &Interaction
   http.interaction(ev.application_id)
     .create_response(ev.id, &ev.token, &response)
     .await?;
+  Ok(())
+}
+
+async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
+  let channel = ev.channel.as_ref().map(|c| c.id);
+  let sub = cmd.options.first();
+  let mut post = false;
+
+  let text = match (sub, channel) {
+    (Some(sub), Some(channel)) if sub.name == "setup" => {
+      let body = match &sub.value {
+        CommandOptionValue::SubCommand(o) => opt_str(o, "text"),
+        _ => None,
+      };
+      match body {
+        Some(b) if !b.trim().is_empty() => {
+          let body = b.replace("\\n", "\n");
+          {
+            let mut map = state.anchors.write().unwrap();
+            let last = map.get(&channel).and_then(|a| a.last);
+            map.insert(channel, Anchor { text: body, last, tick: 0 });
+            save_anchors(&map);
+          }
+          post = true;
+          format!("Anchored in <#{channel}>. It will stay at the bottom.")
+        }
+        _ => "Give me some text to anchor.".to_string(),
+      }
+    }
+    (Some(sub), Some(channel)) if sub.name == "off" => {
+      let removed = {
+        let mut map = state.anchors.write().unwrap();
+        let r = map.remove(&channel);
+        save_anchors(&map);
+        r
+      };
+      if let Some(Anchor { last: Some(m), .. }) = removed {
+        let _ = http.delete_message(channel, m).await;
+      }
+      format!("Anchor removed from <#{channel}>.")
+    }
+    _ => "Use `/anchor` in a server channel.".to_string(),
+  };
+
+  reply_ephemeral(http, ev, text).await?;
+
+  if let (true, Some(channel)) = (post, channel) {
+    if let Err(err) = repost_anchor(http, state, channel).await {
+      eprintln!("initial anchor post failed in {channel}: {err}");
+    }
+  }
   Ok(())
 }
 
