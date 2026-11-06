@@ -13,8 +13,8 @@ use twilight_model::{
     },
     }, channel::{
     ChannelType, message::{
-      AllowedMentions, MessageFlags,
-      component::{Component, Label, TextInput, TextInputStyle},
+      AllowedMentions, MessageFlags, MessageType,
+      component::{ActionRow, Button, ButtonStyle, Component, Label, TextInput, TextInputStyle},
     },
     permission_overwrite::{
       PermissionOverwrite as ChannelOverwrite, PermissionOverwriteType as ChannelOverwriteType,
@@ -54,6 +54,8 @@ struct Anchor {
   text: String,
   last: Option<Id<MessageMarker>>,
   tick: u64,
+  unintrusive: bool,
+  last_msg_ms: u64,
 }
 
 struct State {
@@ -181,9 +183,10 @@ fn load_anchors() -> HashMap<Id<ChannelMarker>, Anchor> {
     for line in text.lines() {
       let mut p = line.splitn(3, ' ');
       if let (Some(c), Some(l), Some(body)) = (p.next(), p.next(), p.next()) {
+        let (l, flag) = l.split_once(':').unwrap_or((l, "0"));
         if let (Ok(c), Ok(l)) = (c.parse::<u64>(), l.parse::<u64>()) {
           if let Some(c) = Id::new_checked(c) {
-            map.insert(c, Anchor { text: unescape(body), last: Id::new_checked(l), tick: 0 });
+            map.insert(c, Anchor { text: unescape(body), last: Id::new_checked(l), tick: 0, unintrusive: flag == "1", last_msg_ms: 0 });
           }
         }
       }
@@ -197,7 +200,7 @@ fn save_anchors(map: &HashMap<Id<ChannelMarker>, Anchor>) {
     .iter()
     .map(|(c, a)| {
       let body = a.text.replace('\\', "\\\\").replace('\n', "\\n");
-      format!("{} {} {}\n", c.get(), a.last.map(|m| m.get()).unwrap_or(0), body)
+      format!("{} {}:{} {}\n", c.get(), a.last.map(|m| m.get()).unwrap_or(0), a.unintrusive as u8, body)
     })
     .collect();
   if let Err(err) = std::fs::write("anchors.txt", text) {
@@ -223,6 +226,9 @@ async fn repost_anchor(http: &Client, state: &State, channel: Id<ChannelMarker>)
     .model()
     .await?;
   {
+    if let Err(err) = http.create_pin(channel, sent.id).await {
+      eprintln!("couldn't pin anchor in {channel}: {err}");
+    }
     let mut map = state.anchors.write().unwrap();
     if let Some(a) = map.get_mut(&channel) {
       a.last = Some(sent.id);
@@ -240,14 +246,30 @@ async fn repost_anchor(http: &Client, state: &State, channel: Id<ChannelMarker>)
 }
 
 fn bump_anchor(http: Arc<Client>, state: Arc<State>, channel: Id<ChannelMarker>) {
-  let tick = {
+  let now = now_ms();
+  let (tick, hushed, stale) = {
     let mut map = state.anchors.write().unwrap();
     let Some(a) = map.get_mut(&channel) else { return };
     a.tick += 1;
-    a.tick
+    let tick = a.tick;
+    let hushed = a.unintrusive && now.saturating_sub(a.last_msg_ms) < 60000;
+    a.last_msg_ms = now;
+    let stale = if hushed { a.last.take() } else { None };
+    if stale.is_some() {
+      save_anchors(&map);
+    }
+    (tick, hushed, stale)
   };
   tokio::spawn(async move {
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    if let Some(old) = stale {
+      if let Err(err) = http.delete_message(channel, old).await {
+        if !is_gone(&err) {
+          eprintln!("couldn't pull anchor in {channel}: {err}");
+        }
+      }
+    }
+    let wait = if hushed { Duration::from_millis(60000) } else { Duration::from_millis(1500) };
+    tokio::time::sleep(wait).await;
     let current = state.anchors.read().unwrap().get(&channel).map(|a| a.tick);
     if current == Some(tick) {
       if let Err(err) = repost_anchor(&http, &state, channel).await {
@@ -551,6 +573,7 @@ async fn main() -> Result<(), BoxErr> {
   .default_member_permissions(Permissions::MANAGE_MESSAGES)
   .option(SubCommandBuilder::new("setup", "Anchor a message to this channel"))
   .option(SubCommandBuilder::new("off", "Remove the anchored message from this channel"))
+  .option(SubCommandBuilder::new("settings", "Change anchor settings for this channel"))
   .build();
   let log_channel = CommandBuilder::new(
     "log-channel",
@@ -636,6 +659,12 @@ async fn main() -> Result<(), BoxErr> {
         }
       }
       Event::MessageCreate(msg) => {
+        if msg.kind == MessageType::ChannelMessagePinned && msg.author.id == state.bot_id {
+          let (http, channel, id) = (Arc::clone(&http), msg.channel_id, msg.id);
+          tokio::spawn(async move {
+            let _ = http.delete_message(channel, id).await;
+          });
+        }
         let secs = state
           .disappear
           .read()
@@ -670,6 +699,12 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
   if let Some(InteractionData::ModalSubmit(modal)) = &ev.data {
     if modal.custom_id == "anchor-setup" {
       return handle_anchor_modal(&http, &state, &ev, modal).await;
+    }
+    return Ok(());
+  }
+  if let Some(InteractionData::MessageComponent(comp)) = &ev.data {
+    if comp.custom_id == "anchor-unintrusive" {
+      return handle_anchor_toggle(&http, &state, &ev).await;
     }
     return Ok(());
   }
@@ -926,6 +961,27 @@ async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionC
       log_event(http, state, ev.guild_id, format!("{} removed the anchor in <#{channel}>.", who(ev))).await;
       format!("Anchor removed from <#{channel}>.")
     }
+    (Some(sub), Some(channel)) if sub.name == "settings" => {
+      let on = state.anchors.read().unwrap().get(&channel).map(|a| a.unintrusive);
+      let Some(on) = on else {
+        return reply_ephemeral(http, ev, "There's no anchor in this channel yet. Run `/anchor setup` first.".into()).await;
+      };
+      let (content, components) = anchor_settings_view(on);
+      let response = InteractionResponse {
+        kind: InteractionResponseType::ChannelMessageWithSource,
+        data: Some(
+          InteractionResponseDataBuilder::new()
+            .content(content)
+            .components(components)
+            .flags(MessageFlags::EPHEMERAL)
+            .build(), 
+        ),
+      };
+      http.interaction(ev.application_id)
+        .create_response(ev.id, &ev.token, &response)
+        .await?;
+      return Ok(());
+    }
     _ => "Use `/anchor` in a server channel.".to_string(),
   };
 
@@ -958,8 +1014,8 @@ async fn handle_anchor_modal(http: &Arc<Client>, state: &Arc<State>, ev: &Intera
 
   {
     let mut map = state.anchors.write().unwrap();
-    let last = map.get(&channel).and_then(|a| a.last);
-    map.insert(channel, Anchor { text: body, last, tick: 0 });
+    let (last, unintrusive) = map.get(&channel).map(|a| (a.last, a.unintrusive)).unwrap_or((None, false)); 
+    map.insert(channel, Anchor { text: body, last, tick: 0, unintrusive, last_msg_ms: 0 });
     save_anchors(&map);
   }
   reply_ephemeral(http, ev, format!("Anchored in <#{channel}>. It will stay at the bottom.")).await?;
@@ -968,6 +1024,59 @@ async fn handle_anchor_modal(http: &Arc<Client>, state: &Arc<State>, ev: &Intera
   if let Err(err) = repost_anchor(http, state, channel).await {
     eprintln!("initial anchor post failed in {channel}: {err}");
   }
+  Ok(())
+}
+
+fn anchor_settings_view(on: bool) -> (String, Vec<Component>) {
+  let word = if on { "On" } else { "Off" };
+  let content = format!("**Anchor settings**\nUnintrusive Mode: **{word}**\n-# The anchor only updates after 1 minute of inactivity.");
+  let button = Button {
+    custom_id: Some("anchor-unintrusive".into()),
+    disabled: false,
+    emoji: None,
+    id: None,
+    label: Some((if on { "Turn off Unintrusive Mode" } else { "Turn on Intrusive Mode" }).to_string()),
+    style: if on { ButtonStyle::Danger } else { ButtonStyle::Success },
+    url: None,
+    sku_id: None,
+  };
+  let row = ActionRow { id: None, components: vec![Component::Button(button)] };
+  (content, vec![Component::ActionRow(row)])
+}
+
+async fn handle_anchor_toggle(http: &Client, state: &State, ev: &InteractionCreate) -> Result<(), BoxErr> {
+  let Some(channel) = ev.channel.as_ref().map(|c| c.id) else {
+    return Ok(());
+  };
+  let flipped = {
+    let mut map = state.anchors.write().unwrap();
+    let now_on = map.get_mut(&channel).map(|a| {
+      a.unintrusive = !a.unintrusive;
+      a.unintrusive
+    });
+    if now_on.is_some() {
+      save_anchors(&map);
+    }
+    now_on
+  };
+  let Some(on) = flipped else {
+    return reply_ephemeral(http, ev, "This channel's anchor is gone.".into()).await;
+  };
+  let (content, components) = anchor_settings_view(on);
+  let response = InteractionResponse {
+    kind: InteractionResponseType::UpdateMessage,
+    data: Some(
+      InteractionResponseDataBuilder::new()
+        .content(content)
+        .components(components)
+        .build(),
+    ),
+  };
+  http.interaction(ev.application_id)
+    .create_response(ev.id, &ev.token, &response)
+    .await?;
+  let word = if on { "on" } else { "off" };
+  log_event(http, state, ev.guild_id, format!("{} turned {word} Unintrusive Mode for the anchor in <#{channel}>", who(ev))).await;
   Ok(())
 }
 
