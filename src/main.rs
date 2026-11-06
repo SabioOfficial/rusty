@@ -61,6 +61,7 @@ struct State {
   disappear: RwLock<HashMap<Id<ChannelMarker>, Disappear>>,
   vcs: RwLock<HashMap<Id<ChannelMarker>, PrivateVc>>,
   anchors: RwLock<HashMap<Id<ChannelMarker>, Anchor>>,
+  logs: RwLock<HashMap<Id<GuildMarker>, Id<ChannelMarker>>>,
   tx: mpsc::UnboundedSender<Job>,
   bot_id: Id<UserMarker>,
 }
@@ -273,6 +274,91 @@ async fn reply_ephemeral(http: &Client, ev: &InteractionCreate, text: String) ->
   Ok(())
 }
 
+fn load_logs() -> HashMap<Id<GuildMarker>, Id<ChannelMarker>> {
+  let mut map = HashMap::new();
+  if let Ok(text) = std::fs::read_to_string("log_channels.txt") {
+    for line in text.lines() {
+      let mut p = line.split_whitespace();
+      if let (Some(g), Some(c)) = (p.next(), p.next()) {
+        if let (Ok(g), Ok(c)) = (g.parse::<u64>(), c.parse::<u64>()) {
+          if let (Some(g), Some(c)) = (Id::new_checked(g), Id::new_checked(c)) {
+            map.insert(g, c);
+          }
+        }
+      }
+    }
+  }
+  map
+}
+
+fn save_logs(map: &HashMap<Id<GuildMarker>, Id<ChannelMarker>>) {
+  let text: String = map
+    .iter()
+    .map(|(g, c)| format!("{} {}\n", g.get(), c.get()))
+    .collect();
+  if let Err(err) = std::fs::write("log_channels.txt", text) {
+    eprintln!("failed to save log_channels.txt: {err}");
+  }
+}
+
+fn who(ev: &InteractionCreate) -> String {
+  ev.author_id().map(|u| format!("<@{u}>")).unwrap_or_else(|| "Someone".into())
+}
+
+async fn log_event(http: &Client, state: &State, guild: Option<Id<GuildMarker>>, text: String) {
+  let Some(guild) = guild else { return };
+  let Some(channel) = state.logs.read().unwrap().get(&guild).copied() else {
+    return;
+  };
+  let no_pings = AllowedMentions::default();
+  if let Err(err) = http
+    .create_message(channel)
+    .content(&text)
+    .flags(MessageFlags::SUPPRESS_NOTIFICATIONS)
+    .allowed_mentions(Some(&no_pings))
+    .await
+  {
+    eprintln!("log post failed in {channel}: {err}");
+  }
+}
+
+async fn handle_log_channel(http: &Client, state: &State, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
+  let text = match (ev.guild_id, cmd.options.first()) {
+    (Some(guild), Some(sub)) if sub.name == "setup" => {
+      let target = match &sub.value {
+        CommandOptionValue::SubCommand(o) => opt_channel(o, "channel"),
+        _ => None,
+      };
+      match target {
+        Some(channel) => {
+          let probe = http
+            .create_message(channel)
+            .content("Log channel set. Bot actions will be posted here.")
+            .flags(MessageFlags::SUPPRESS_NOTIFICATIONS)
+            .await;
+          if probe.is_err() {
+            format!("I can't send messages in <#{channel}>. Give me View Channel and Send Messages permissions there.")
+          } else {
+            let mut map = state.logs.write().unwrap();
+            map.insert(guild, channel);
+            save_logs(&map);
+            format!("Logs will now be posted in <#{channel}>.")
+          }
+        }
+        None => "Pick a text channel.".to_string(),
+      }
+    }
+    (Some(guild), Some(sub)) if sub.name == "off" => {
+      let mut map = state.logs.write().unwrap();
+      map.remove(&guild);
+      save_logs(&map);
+      "Logging is off.".to_string()
+    }
+    _ => "Use `/log-channel` in a server.".to_string(),
+  };
+  reply_ephemeral(http, ev, text).await
+}
+
 async fn scheduler(http: Arc<Client>, mut rx: mpsc::UnboundedReceiver<Job>) {
   let mut heap: BinaryHeap<Reverse<Job>> = BinaryHeap::new();
   loop {
@@ -466,8 +552,23 @@ async fn main() -> Result<(), BoxErr> {
   .option(SubCommandBuilder::new("setup", "Anchor a message to this channel"))
   .option(SubCommandBuilder::new("off", "Remove the anchored message from this channel"))
   .build();
+  let log_channel = CommandBuilder::new(
+    "log-channel",
+    "Choose where the bot logs its actions",
+  CommandType::ChatInput,
+  )
+  .default_member_permissions(Permissions::MANAGE_GUILD)
+  .option(
+    SubCommandBuilder::new("setup", "Send bot logs to a channel").option(
+      ChannelBuilder::new("channel", "Where logs should go")
+        .channel_types([ChannelType::GuildText])
+        .required(true),
+    ),
+  )
+  .option(SubCommandBuilder::new("off", "Stop logging"))
+  .build();
   http.interaction(app.id)
-    .set_global_commands(&[boom, redirect, disappearing, private_vc, anchor])
+    .set_global_commands(&[boom, redirect, disappearing, private_vc, anchor, log_channel])
     .await?;
 
   let me = http.current_user().await?.model().await?;
@@ -478,6 +579,7 @@ async fn main() -> Result<(), BoxErr> {
     disappear: RwLock::new(load_disappear()),
     vcs: RwLock::new(load_vcs()),
     anchors: RwLock::new(load_anchors()),
+    logs: RwLock::new(load_logs()),
     tx,
     bot_id: me.id,
   });
@@ -574,6 +676,7 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
   let Some(InteractionData::ApplicationCommand(cmd)) = &ev.data else {
     return Ok(());
   };
+
   if cmd.name == "person-redirect" {
     return handle_person_redirect(&http, &state, &ev, cmd).await;
   } else if cmd.name == "disappearing" {
@@ -582,7 +685,10 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     return handle_private_vc(&http, &state, &ev, cmd).await;
   } else if cmd.name == "anchor" {
     return handle_anchor(&http, &state, &ev, cmd).await;
+  } else if cmd.name == "log-channel" {
+    return handle_log_channel(&http, &state, &ev, cmd).await;
   }
+
   if cmd.name != "boom" {
     return Ok(());
   }
@@ -734,6 +840,7 @@ async fn handle_disappearing(http: &Arc<Client>, state: &State, ev: &Interaction
               save_disappear(&map);
             }
             tokio::spawn(catch_up(Arc::clone(http), state.tx.clone(), channel, cfg));
+            log_event(http, state, ev.guild_id, format!("{} set disappearing messages in <#{channel}> to {}.", who(ev), human(secs))).await;
             format!("Messages sent in <#{channel}> from now on will be deleted after {}.", human(secs))
           }
           _ => "That's too long. The maximum is 1 year.".to_string(),
@@ -747,6 +854,7 @@ async fn handle_disappearing(http: &Arc<Client>, state: &State, ev: &Interaction
         map.remove(&channel);
         save_disappear(&map);
       }
+      log_event(http, state, ev.guild_id, format!("{} turned off disappearing messages in <#{channel}>.", who(ev))).await;
       format!("Disappearing messages are off in <#{channel}>. Already-queued messages will still be deleted.")
     }
     _ => "Use `/disappearing` in a server channel.".to_string(),
@@ -815,6 +923,7 @@ async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionC
       if let Some(Anchor { last: Some(m), .. }) = removed {
         let _ = http.delete_message(channel, m).await;
       }
+      log_event(http, state, ev.guild_id, format!("{} removed the anchor in <#{channel}>.", who(ev))).await;
       format!("Anchor removed from <#{channel}>.")
     }
     _ => "Use `/anchor` in a server channel.".to_string(),
@@ -854,6 +963,7 @@ async fn handle_anchor_modal(http: &Arc<Client>, state: &Arc<State>, ev: &Intera
     save_anchors(&map);
   }
   reply_ephemeral(http, ev, format!("Anchored in <#{channel}>. It will stay at the bottom.")).await?;
+  log_event(http, state, ev.guild_id, format!("{} set an anchor in <#{channel}>.", who(ev))).await;
 
   if let Err(err) = repost_anchor(http, state, channel).await {
     eprintln!("initial anchor post failed in {channel}: {err}");
@@ -1049,6 +1159,7 @@ async fn run_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &Interaction
         save_vcs(&map);
       }
       spawn_vc_timer(Arc::clone(http), Arc::clone(state), channel.id, expires_ms);
+      log_event(http, state, Some(guild_id), format!("<@{author}> created private VC <#{}>.", channel.id)).await;
       Ok(format!(
         "Created <#{}>. Only you can join. Invite people with `/create-private-vc modify users-add`. It auto-deletes <t:{}:R>.",
         channel.id,
@@ -1082,6 +1193,7 @@ async fn run_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &Interaction
             return Ok("You can't pick this user.".into());
           }
           allow_member(http, channel, target).await?;
+          log_event(http, state, Some(guild_id), format!("<@{author}> invited <@{target}> to <#{channel}>.")).await;
           let dm = format!("You've been invited by <@{author}> to join the private voice channel <#{channel}>.");
           if send_dm(http, target, &dm).await.is_ok() {
             Ok(format!("Added <@{target}> to <#{channel}> and sent them a DM."))
@@ -1104,9 +1216,11 @@ async fn run_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &Interaction
             }
             save_vcs(&map);
           }
+          log_event(http, state, Some(guild_id), format!("<@{author}> transferred <#{channel}> to <@{target}>.")).await;
           Ok(format!("<@{target}> now owns <#{channel}>. You keep access but can no longer modify it."))
         }
         "close" => {
+          log_event(http, state, Some(guild_id), format!("<@{author}> closed private VC {channel}.")).await;
           delete_vc(http, state, channel).await;
           Ok("Closed the private VC.".into())
         }

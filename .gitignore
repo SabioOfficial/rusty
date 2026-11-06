@@ -25,7 +25,9 @@ rustc-ice-*.txt
 
 .env
 
+# The text files
 disappear.txt
 redirects.txt
 private_vcs.txt
 anchors.txt
+log_channels.txt
