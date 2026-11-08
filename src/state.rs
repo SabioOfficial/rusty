@@ -1,10 +1,12 @@
-use std::{collections::HashMap, error::Error, sync::RwLock};
+use std::{collections::HashMap, error::Error, sync::{Arc, RwLock}};
 
 use tokio::sync::mpsc;
-use twilight_model::id::{
+use twilight_model::{id::{
   Id,
   marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
-};
+}};
+
+use crate::stats::Stats;
 
 pub type BoxErr = Box<dyn Error + Send + Sync>;
 
@@ -39,4 +41,5 @@ pub struct State {
   pub logs: RwLock<HashMap<Id<GuildMarker>, Id<ChannelMarker>>>,
   pub tx: mpsc::UnboundedSender<Job>,
   pub bot_id: Id<UserMarker>,
+  pub stats: Arc<Stats>,
 }

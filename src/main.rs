@@ -2,6 +2,7 @@ mod commands;
 mod persist;
 mod scheduler;
 mod state;
+mod stats;
 mod util;
 
 use std::{
@@ -33,6 +34,7 @@ use crate::{
   persist::{load_anchors, load_disappear, load_logs, load_redirects, load_vcs},
   scheduler::{catch_up, scheduler},
   state::{BoxErr, State},
+  stats::{daily_summary, load_stats},
   util::snowflake_ms,
 };
 
@@ -58,7 +60,8 @@ async fn main() -> Result<(), BoxErr> {
 
   let me = http.current_user().await?.model().await?;
   let (tx, rx) = mpsc::unbounded_channel();
-  tokio::spawn(scheduler(Arc::clone(&http), rx));
+  let stats = Arc::new(load_stats());
+  tokio::spawn(scheduler(Arc::clone(&http), rx, Arc::clone(&stats)));
   let state = Arc::new(State {
     redirects: RwLock::new(load_redirects()),
     disappear: RwLock::new(load_disappear()),
@@ -67,7 +70,9 @@ async fn main() -> Result<(), BoxErr> {
     logs: RwLock::new(load_logs()),
     tx,
     bot_id: me.id,
+    stats,
   });
+  tokio::spawn(daily_summary(Arc::clone(&http), Arc::clone(&state)));
   
   let mut shard = Shard::new(ShardId::ONE, token, Intents::GUILD_MESSAGES);
   println!("rusty online");
@@ -181,7 +186,7 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     "anchor" => handle_anchor(&http, &state, &ev, cmd).await,
     "log-channel" => handle_log_channel(&http, &state, &ev, cmd).await,
     "usage" => handle_usage(&http, &state, &ev).await,
-    "boom" => handle_boom(&http, &ev, received, received_wall, gateway_latency).await,
+    "boom" => handle_boom(&http, &state, &ev, received, received_wall, gateway_latency).await,
     _ => Ok(()),
   }
 }

@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::{Arc, atomic::Ordering::Relaxed}, time::Duration};
 
 use twilight_http::Client;
 use twilight_model::{
@@ -36,6 +36,7 @@ async fn repost_anchor(http: &Client, state: &State, channel: Id<ChannelMarker>)
     .await?
     .model()
     .await?;
+  state.stats.anchors.fetch_add(1, Relaxed);
   {
     if let Err(err) = http.create_pin(channel, sent.id).await {
       eprintln!("couldn't pin anchor in {channel}: {err}");

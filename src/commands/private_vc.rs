@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::{Arc, atomic::Ordering::Relaxed}, time::Duration};
 
 use twilight_http::{Client, error::ErrorType};
 use twilight_model::{
@@ -154,7 +154,8 @@ async fn run_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &Interaction
         .await?
         .model()
         .await?;
-
+      
+      state.stats.vcs.fetch_add(1, Relaxed);
       let expires_ms = now_ms() + secs * 1000;
       {
         let mut map = state.vcs.write().unwrap();

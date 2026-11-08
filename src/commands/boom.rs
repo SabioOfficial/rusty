@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+  sync::atomic::Ordering::Relaxed,
+  time::{Duration, Instant, SystemTime, UNIX_EPOCH}
+};
 
 use twilight_http::Client;
 use twilight_model::{
@@ -7,9 +10,10 @@ use twilight_model::{
 };
 use twilight_util::builder::InteractionResponseDataBuilder;
 
-use crate::state::BoxErr;
+use crate::state::{BoxErr, State};
 
-pub async fn handle_boom(http: &Client, ev: &InteractionCreate, received: Instant, received_wall: SystemTime, gateway_latency: Option<Duration>) -> Result<(), BoxErr> {
+pub async fn handle_boom(http: &Client, state: &State, ev: &InteractionCreate, received: Instant, received_wall: SystemTime, gateway_latency: Option<Duration>) -> Result<(), BoxErr> {
+  state.stats.booms.fetch_add(1, Relaxed);
   let created_ms = (ev.id.get() >> 22) + 1420070400000;
   let now_ms = received_wall
     .duration_since(UNIX_EPOCH)
