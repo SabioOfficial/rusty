@@ -65,3 +65,7 @@ You should see `rusty online`. Sometimes it may take a Discord refresh (Ctrl + R
 
 - [ ] Use Database instead of text files
 - [ ] Make it easier to input the token
+- [ ] Customizable level of inactivity for the anchor (how many messages, how long)
+- [ ] Custom !! thingy
+- [ ] Private vcs should have an admin-only setting to change what category the vcs spawn in
+
