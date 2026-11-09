@@ -10,6 +10,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -23,7 +24,7 @@ jobs:
             bin: rusty
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup update stable
       - run: cargo build --release --target ${{ matrix.target }}
       - name: Rename artifact
@@ -31,6 +32,19 @@ jobs:
         run: |
           mkdir dist
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} dist/rusty-${{ matrix.target }}${{ endsWith(matrix.bin, '.exe') && '.exe' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rusty-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: dist/* 
