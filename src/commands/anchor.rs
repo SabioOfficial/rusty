@@ -12,10 +12,9 @@ use twilight_model::{
     AllowedMentions,
   },
   gateway::payload::incoming::InteractionCreate,
-  http::interaction::{InteractionResponse, InteractionResponseType},
   id::{Id, marker::ChannelMarker},
 };
-use twilight_util::builder::InteractionResponseDataBuilder;
+use twilight_util::builder::interaction_response::{ChannelMessageBuilder, ModalBuilder, UpdateMessageBuilder};
 
 use crate::{
   persist::save_anchors,
@@ -117,21 +116,17 @@ pub async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &Interact
         required: Some(true),
         value: None,
       };
-      let response = InteractionResponse {
-        kind: InteractionResponseType::Modal,
-        data: Some(
-          InteractionResponseDataBuilder::new()
-            .custom_id("anchor-setup")
-            .title("Set anchor message")
-            .components([Component::Label(Label {
-              id: None,
-              label: "Anchored message".into(),
-              description: None,
-              component: Box::new(Component::TextInput(input)),
-            })])
-            .build(),
-        ),
-      };
+      let response = ModalBuilder::new(
+        "anchor-setup",
+        "Set anchor message",
+        [Component::Label(Label {
+          id: None,
+          label: "Anchored message".into(),
+          description: None,
+          component: Box::new(Component::TextInput(input)),
+        })],
+      )
+      .build();
       http.interaction(ev.application_id)
         .create_response(ev.id, &ev.token, &response)
         .await?;
@@ -161,16 +156,11 @@ pub async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &Interact
         return reply_ephemeral(http, ev, "There's no anchor in this channel yet. Run `/anchor setup` first.".into()).await;
       };
       let (content, components) = anchor_settings_view(on, quiet_ms, min_msgs);
-      let response = InteractionResponse {
-        kind: InteractionResponseType::ChannelMessageWithSource,
-        data: Some(
-          InteractionResponseDataBuilder::new()
-            .content(content)
-            .components(components)
-            .flags(MessageFlags::EPHEMERAL)
-            .build(), 
-        ),
-      };
+      let response = ChannelMessageBuilder::new()
+        .content(content)
+        .components(components)
+        .flags(MessageFlags::EPHEMERAL)
+        .build();
       http.interaction(ev.application_id)
         .create_response(ev.id, &ev.token, &response)
         .await?;
@@ -281,15 +271,10 @@ pub async fn handle_anchor_toggle(http: &Client, state: &State, ev: &Interaction
     return reply_ephemeral(http, ev, "This channel's anchor is gone.".into()).await;
   };
   let (content, components) = anchor_settings_view(on, quiet_ms, min_msgs);
-  let response = InteractionResponse {
-    kind: InteractionResponseType::UpdateMessage,
-    data: Some(
-      InteractionResponseDataBuilder::new()
-        .content(content)
-        .components(components)
-        .build(),
-    ),
-  };
+  let response = UpdateMessageBuilder::new()
+    .content(content)
+    .components(components)
+    .build();
   http.interaction(ev.application_id)
     .create_response(ev.id, &ev.token, &response)
     .await?;
@@ -358,33 +343,29 @@ pub async fn handle_anchor_timing_button(http: &Client, state: &State, ev: &Inte
   let Some((quiet_ms, min_msgs)) = snapshot else {
     return reply_ephemeral(http, ev, "This channel's anchor is gone.".into()).await;
   };
-  let response = InteractionResponse {
-    kind: InteractionResponseType::Modal,
-    data: Some(
-      InteractionResponseDataBuilder::new()
-        .custom_id("anchor-timing")
-        .title("Anchor timing")
-        .components([
-          text_field(
-            "Wait before moving",
-            "How long the channel must be quiet. Use s, m or h (max 24h).",
-            "wait",
-            "e.g. 1.5s, 30s, 5m, 1h",
-            10,
-            wait_input(quiet_ms),
-          ),
-          text_field(
-            "Messages before moving",
-            "How many messages must be sent first (1-100).",
-            "messages",
-            "e.g. 1, 5, 20",
-            3,
-            min_msgs.to_string(),
-          ),
-        ])
-        .build(),
-    ),
-  };
+  let response = ModalBuilder::new(
+    "anchor-timing",
+    "Anchor Timing",
+    [
+      text_field(
+        "Wait before moving",
+        "How long the channel must be quiet. Use s, m or h (max 24h).",
+        "wait",
+        "1m",
+        10,
+        wait_input(quiet_ms),
+      ),
+      text_field(
+        "Messages before moving",
+        "How many messages must be sent first to count as an 'active' channel.",
+        "messages",
+        "1",
+        3,
+        min_msgs.to_string(),
+      ),
+    ],
+  )
+  .build();
   http.interaction(ev.application_id)
     .create_response(ev.id, &ev.token, &response)
     .await?;
@@ -424,15 +405,10 @@ pub async fn handle_anchor_timing_modal(http: &Client, state: &State, ev: &Inter
   };
 
   let (content, components) = anchor_settings_view(on, wait_ms, min_msgs);
-  let response = InteractionResponse {
-    kind: InteractionResponseType::UpdateMessage,
-    data: Some(
-      InteractionResponseDataBuilder::new()
-        .content(content)
-        .components(components)
-        .build(), 
-    ),
-  };
+  let response = UpdateMessageBuilder::new()
+    .content(content)
+    .components(components)
+    .build();
   http.interaction(ev.application_id)
     .create_response(ev.id, &ev.token, &response)
     .await?;

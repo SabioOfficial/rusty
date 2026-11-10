@@ -5,7 +5,6 @@ use twilight_model::{
   application::interaction::application_command::{CommandData, CommandOptionValue},
   channel::{
     ChannelType,
-    message::MessageFlags,
     permission_overwrite::{
       PermissionOverwrite as ChannelOverwrite, PermissionOverwriteType as ChannelOverwriteType,
     },
@@ -13,7 +12,6 @@ use twilight_model::{
   gateway::payload::incoming::InteractionCreate,
   guild::Permissions,
   http::{
-    interaction::{InteractionResponse, InteractionResponseType},
     permission_overwrite::{PermissionOverwrite, PermissionOverwriteType},
   },
   id::{
@@ -21,12 +19,11 @@ use twilight_model::{
     marker::{ChannelMarker, GenericMarker, UserMarker},
   },
 };
-use twilight_util::builder::InteractionResponseDataBuilder;
 
 use crate::{
   persist::save_vcs,
   state::{BoxErr, PrivateVc, State},
-  util::{log_event, now_ms, opt_channel, opt_int, opt_str, opt_user, unit_secs},
+  util::{deferred_ephemeral, log_event, now_ms, opt_channel, opt_int, opt_str, opt_user, unit_secs},
 };
 
 pub fn spawn_vc_timer(http: Arc<Client>, state: Arc<State>, channel: Id<ChannelMarker>, expires_ms: u64) {
@@ -79,10 +76,7 @@ async fn send_dm(http: &Client, user: Id<UserMarker>, text: &str) -> Result<(), 
 
 pub async fn handle_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
   let iclient = http.interaction(ev.application_id);
-  let ack = InteractionResponse {
-    kind: InteractionResponseType::DeferredChannelMessageWithSource,
-    data: Some(InteractionResponseDataBuilder::new().flags(MessageFlags::EPHEMERAL).build()),
-  };
+  let ack = deferred_ephemeral();
   iclient.create_response(ev.id, &ev.token, &ack).await?;
 
   let text = match run_private_vc(http, state, ev, cmd).await {

@@ -2,14 +2,12 @@ use std::time::Duration;
 
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use twilight_http::Client;
-use twilight_model::{
-  channel::message::MessageFlags,
-  gateway::payload::incoming::InteractionCreate,
-  http::interaction::{InteractionResponse, InteractionResponseType},
-};
-use twilight_util::builder::InteractionResponseDataBuilder;
+use twilight_model::gateway::payload::incoming::InteractionCreate;
 
-use crate::state::{BoxErr, State};
+use crate::{
+  state::{BoxErr, State},
+  util::deferred_ephemeral,
+};
 
 fn fmt_bytes(b: u64) -> String {
   let mib = b as f64 / 1048576.0;
@@ -23,10 +21,7 @@ fn fmt_dur(secs: u64) -> String {
 
 pub async fn handle_usage(http: &Client, _state: &State, ev: &InteractionCreate) -> Result<(), BoxErr> {
   let iclient = http.interaction(ev.application_id);
-  let ack = InteractionResponse {
-    kind: InteractionResponseType::DeferredChannelMessageWithSource,
-    data: Some(InteractionResponseDataBuilder::new().flags(MessageFlags::EPHEMERAL).build()),
-  };
+  let ack = deferred_ephemeral();
   iclient.create_response(ev.id, &ev.token, &ack).await?;
 
   let pid = Pid::from_u32(std::process::id());

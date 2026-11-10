@@ -3,17 +3,14 @@ use std::sync::Arc;
 use twilight_http::Client;
 use twilight_model::{
   application::interaction::application_command::{CommandData, CommandOptionValue},
-  channel::message::{AllowedMentions, MessageFlags},
   gateway::payload::incoming::InteractionCreate,
-  http::interaction::{InteractionResponse, InteractionResponseType},
 };
-use twilight_util::builder::InteractionResponseDataBuilder;
 
 use crate::{
   persist::save_disappear,
   scheduler::catch_up,
   state::{BoxErr, Disappear, State},
-  util::{human, log_event, now_ms, unit_secs, who},
+  util::{human, log_event, now_ms, reply_ephemeral, unit_secs, who},
 };
 
 pub async fn handle_disappearing(http: &Arc<Client>, state: &State, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
@@ -62,18 +59,5 @@ pub async fn handle_disappearing(http: &Arc<Client>, state: &State, ev: &Interac
     _ => "Use `/disappearing` in a server channel.".to_string(),
   };
 
-  let response = InteractionResponse {
-    kind: InteractionResponseType::ChannelMessageWithSource,
-    data: Some(
-      InteractionResponseDataBuilder::new()
-        .content(text)
-        .flags(MessageFlags::EPHEMERAL)
-        .allowed_mentions(AllowedMentions::default())
-        .build(),
-    ),
-  };
-  http.interaction(ev.application_id)
-    .create_response(ev.id, &ev.token, &response)
-    .await?;
-  Ok(())
+  reply_ephemeral(http, ev, text).await
 }

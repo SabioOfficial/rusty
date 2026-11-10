@@ -5,13 +5,13 @@ use twilight_model::{
   application::interaction::application_command::{CommandDataOption, CommandOptionValue},
   channel::message::{AllowedMentions, MessageFlags},
   gateway::payload::incoming::InteractionCreate,
-  http::interaction::{InteractionResponse, InteractionResponseType},
+  http::interaction::{InteractionResponse, InteractionResponseData, InteractionResponseType},
   id::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
   },
 };
-use twilight_util::builder::InteractionResponseDataBuilder;
+use twilight_util::builder::interaction_response::ChannelMessageBuilder;
 
 use crate::state::{BoxErr, State};
 
@@ -62,20 +62,25 @@ pub fn who(ev: &InteractionCreate) -> String {
 }
 
 pub async fn reply_ephemeral(http: &Client, ev: &InteractionCreate, text: String) -> Result<(), BoxErr> {
-  let response = InteractionResponse {
-    kind: InteractionResponseType::ChannelMessageWithSource,
-    data: Some(
-      InteractionResponseDataBuilder::new()
-        .content(text)
-        .flags(MessageFlags::EPHEMERAL)
-        .allowed_mentions(AllowedMentions::default())
-        .build(),
-    ),
-  };
+  let response = ChannelMessageBuilder::new()
+    .content(text)
+    .flags(MessageFlags::EPHEMERAL)
+    .allowed_mentions(AllowedMentions::default())
+    .build();
   http.interaction(ev.application_id)
     .create_response(ev.id, &ev.token, &response)
     .await?;
   Ok(())
+}
+
+pub fn deferred_ephemeral() -> InteractionResponse {
+  InteractionResponse {
+    kind: InteractionResponseType::DeferredChannelMessageWithSource,
+    data: Some(InteractionResponseData {
+      flags: Some(MessageFlags::EPHEMERAL),
+      ..Default::default()
+    }),
+  }
 }
 
 pub async fn log_event(http: &Client, state: &State, guild: Option<Id<GuildMarker>>, text: String) {

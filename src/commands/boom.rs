@@ -4,11 +4,8 @@ use std::{
 };
 
 use twilight_http::Client;
-use twilight_model::{
-  gateway::payload::incoming::InteractionCreate,
-  http::interaction::{InteractionResponse, InteractionResponseType},
-};
-use twilight_util::builder::InteractionResponseDataBuilder;
+use twilight_model::gateway::payload::incoming::InteractionCreate;
+use twilight_util::builder::interaction_response::ChannelMessageBuilder;
 
 use crate::state::{BoxErr, State};
 
@@ -36,10 +33,7 @@ pub async fn handle_boom(http: &Client, state: &State, ev: &InteractionCreate, r
     -# REST reply round-trip: measuring..."
   );
 
-  let response = InteractionResponse {
-    kind: InteractionResponseType::ChannelMessageWithSource,
-    data: Some(InteractionResponseDataBuilder::new().content(first).build()),
-  };
+  let response = ChannelMessageBuilder::new().content(first).build();
 
   let sent_at = Instant::now();
   iclient

@@ -3,15 +3,14 @@ use std::sync::Arc;
 use twilight_http::Client;
 use twilight_model::{
   application::interaction::application_command::{CommandData, CommandOptionValue},
-  channel::message::{AllowedMentions, MessageFlags},
+  channel::message::AllowedMentions,
   gateway::payload::incoming::{InteractionCreate, MessageCreate},
-  http::interaction::{InteractionResponse, InteractionResponseType},
 };
-use twilight_util::builder::InteractionResponseDataBuilder;
 
 use crate::{
   persist::save_redirects,
   state::{BoxErr, State},
+  util::reply_ephemeral,
 };
 
 pub async fn handle_person_redirect(http: &Client, state: &State, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
@@ -37,20 +36,7 @@ pub async fn handle_person_redirect(http: &Client, state: &State, ev: &Interacti
     _ => "Use `/person-redirect setup` in a server and pick a user.".to_string(),
   };
 
-  let response = InteractionResponse {
-    kind: InteractionResponseType::ChannelMessageWithSource,
-    data: Some(
-      InteractionResponseDataBuilder::new()
-        .content(text)
-        .flags(MessageFlags::EPHEMERAL)
-        .allowed_mentions(AllowedMentions::default())
-        .build(),
-    ),
-  };
-  http.interaction(ev.application_id)
-    .create_response(ev.id, &ev.token, &response)
-    .await?;
-  Ok(())
+  reply_ephemeral(http, ev, text).await
 }
 
 pub async fn handle_message(http: Arc<Client>, state: Arc<State>, msg: Box<MessageCreate>) -> Result<(), BoxErr> {
