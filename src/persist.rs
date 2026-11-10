@@ -84,10 +84,17 @@ pub fn load_anchors() -> HashMap<Id<ChannelMarker>, Anchor> {
     for line in text.lines() {
       let mut p = line.splitn(3, ' ');
       if let (Some(c), Some(l), Some(body)) = (p.next(), p.next(), p.next()) {
-        let (l, flag) = l.split_once(':').unwrap_or((l, "0"));
+        let mut f = l.split(':');
+        let l = f.next().unwrap_or("0");
+        let flag = f.next().unwrap_or("0");
+        let quiet_ms = f
+          .next()
+          .and_then(|s| s.parse::<u64>().ok())
+          .unwrap_or(if flag == "1" { 60000 } else { 1500 });
+        let min_msgs = f.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(1);
         if let (Ok(c), Ok(l)) = (c.parse::<u64>(), l.parse::<u64>()) {
           if let Some(c) = Id::new_checked(c) {
-            map.insert(c, Anchor { text: unescape(body), last: Id::new_checked(l), tick: 0, unintrusive: flag == "1", last_msg_ms: 0 });
+            map.insert(c, Anchor { text: unescape(body), last: Id::new_checked(l), tick: 0, unintrusive: flag == "1", last_msg_ms: 0, quiet_ms, min_msgs, pending: 0 });
           }
         }
       }
@@ -101,7 +108,7 @@ pub fn save_anchors(map: &HashMap<Id<ChannelMarker>, Anchor>) {
     .iter()
     .map(|(c, a)| {
       let body = a.text.replace('\\', "\\\\").replace('\n', "\\n");
-      format!("{} {}:{} {}\n", c.get(), a.last.map(|m| m.get()).unwrap_or(0), a.unintrusive as u8, body)
+      format!("{} {}:{}:{}:{} {}\n", c.get(), a.last.map(|m| m.get()).unwrap_or(0), a.unintrusive as u8, a.quiet_ms, a.min_msgs, body)
     })
     .collect();
   if let Err(err) = std::fs::write("anchors.txt", text) {

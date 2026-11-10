@@ -22,7 +22,7 @@ use twilight_model::{
 
 use crate::{
   commands::{
-    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_toggle},
+    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle},
     boom::handle_boom,
     disappearing::handle_disappearing,
     log_channel::handle_log_channel,
@@ -167,11 +167,17 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     if modal.custom_id == "anchor-setup" {
       return handle_anchor_modal(&http, &state, &ev, modal).await;
     }
+    if modal.custom_id == "anchor-timing" {
+      return handle_anchor_timing_modal(&http, &state, &ev, modal).await;
+    }
     return Ok(());
   }
   if let Some(InteractionData::MessageComponent(comp)) = &ev.data {
     if comp.custom_id == "anchor-unintrusive" {
       return handle_anchor_toggle(&http, &state, &ev).await;
+    }
+    if comp.custom_id == "anchor-timing-open" {
+      return handle_anchor_timing_button(&http, &state, &ev).await;
     }
     return Ok(());
   }

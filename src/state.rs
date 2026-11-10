@@ -31,6 +31,9 @@ pub struct Anchor {
   pub tick: u64,
   pub unintrusive: bool,
   pub last_msg_ms: u64,
+  pub quiet_ms: u64,
+  pub min_msgs: u64,
+  pub pending: u64,
 }
 
 pub struct State {
