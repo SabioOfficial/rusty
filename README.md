@@ -12,8 +12,9 @@ We currently don't offer server hosting for rusty. Self-hosting it is required f
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and create a **New Application**.
 2. Open the **Bot** tab, then **Reset Token** and copy it. Save this somewhere secure.
-3. Open **OAuth2**, then in the **OAuth2 URL Generator** section, check the scopes `bot` and `applications.commands`, and give it permissions its command need (Send Messages, Manage Messages, Manage Channels).
-4. Open the generated URL to invite the bot to your server.
+3. Enable **Message Content Intent** in the same tab you're in. It's under **Privileged Gateway Intents**.
+4. Open **OAuth2**, then in the **OAuth2 URL Generator** section, check the scopes `bot` and `applications.commands`, and give it permissions its command need (Send Messages, Manage Messages, Manage Channels).
+5. Open the generated URL to invite the bot to your server.
 
 ### 2. Get the bot
 
