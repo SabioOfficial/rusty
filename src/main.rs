@@ -77,10 +77,6 @@ async fn main() -> Result<(), BoxErr> {
   tokio::spawn(daily_summary(Arc::clone(&http), Arc::clone(&state)));
   
   let mut shard = Shard::new(ShardId::ONE, token, Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT);
-  println!(
-    "rusty is now online!\n\
-    Logged in as []"
-  ); // TODO: Show logged in bot username ehre
 
   while let Some(item) = shard
     .next_event(EventTypeFlags::INTERACTION_CREATE | EventTypeFlags::MESSAGE_CREATE | EventTypeFlags::READY)
@@ -109,6 +105,11 @@ async fn main() -> Result<(), BoxErr> {
         });
       }
       Event::Ready(_) => {
+        println!(
+          "rusty is now online!\n\
+          Logged in as {}",
+          me.name
+        );
         let channels: Vec<_> = state
           .disappear
           .read()
