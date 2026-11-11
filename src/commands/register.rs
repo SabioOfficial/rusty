@@ -101,6 +101,13 @@ pub fn definitions() -> Vec<Command> {
   .option(SubCommandBuilder::new("off", "Stop logging"))
   .build();
   let usage = CommandBuilder::new("usage", "Show the bot's CPU and RAM usage.", CommandType::ChatInput).build();
+  let autoreply = CommandBuilder::new(
+    "autoreply",
+    "Manage custom !!name auto-replies",
+    CommandType::ChatInput,
+  )
+  .default_member_permissions(Permissions::ADMINISTRATOR)
+  .build();
 
-  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage]
+  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply]
 }

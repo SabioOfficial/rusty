@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap};
 
 use twilight_model::id::{
   Id,
@@ -167,5 +167,35 @@ pub fn save_vcs(map: &HashMap<Id<ChannelMarker>, PrivateVc>) {
     .collect();
   if let Err(err) = std::fs::write("private_vcs.txt", text) {
     eprintln!("failed to save private_vcs.txt: {err}");
+  }
+}
+
+pub fn load_autoreplies() -> HashMap<Id<GuildMarker>, HashMap<String, String>> {
+  let mut map: HashMap<Id<GuildMarker>, HashMap<String, String>> = HashMap::new();
+  if let Ok(text) = std::fs::read_to_string("autoreplies.txt") {
+    for line in text.lines() {
+      let mut p = line.splitn(3, ' ');
+      if let (Some(g), Some(name), Some(body)) = (p.next(), p.next(), p.next()) {
+        if let Ok(g) = g.parse::<u64>() {
+          if let Some(g) = Id::new_checked(g) {
+            map.entry(g).or_default().insert(name.to_string(), unescape(body));
+          }
+        }
+      }
+    }
+  }
+  map
+}
+
+pub fn save_autoreplies(map: &HashMap<Id<GuildMarker>, HashMap<String, String>>) {
+  let mut text = String::new();
+  for (g, replies) in map {
+    for (name, body) in replies {
+      let body = body.replace('\\', "\\\\").replace('\r', "").replace('\n', "\\n");
+      text.push_str(&format!("{} {} {}\n", g.get(), name, body));
+    }
+  }
+  if let Err(err) = std::fs::write("autoreplies.txt", text) {
+    eprintln!("failed to save autoreplies.txt: {err}");
   }
 }

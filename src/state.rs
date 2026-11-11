@@ -42,6 +42,7 @@ pub struct State {
   pub vcs: RwLock<HashMap<Id<ChannelMarker>, PrivateVc>>,
   pub anchors: RwLock<HashMap<Id<ChannelMarker>, Anchor>>,
   pub logs: RwLock<HashMap<Id<GuildMarker>, Id<ChannelMarker>>>,
+  pub autoreplies: RwLock<HashMap<Id<GuildMarker>, HashMap<String, String>>>,
   pub tx: mpsc::UnboundedSender<Job>,
   pub bot_id: Id<UserMarker>,
   pub stats: Arc<Stats>,

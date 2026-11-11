@@ -23,6 +23,7 @@ use twilight_model::{
 use crate::{
   commands::{
     anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle},
+    autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply},
     boom::handle_boom,
     disappearing::handle_disappearing,
     log_channel::handle_log_channel,
@@ -31,7 +32,7 @@ use crate::{
     register::definitions,
     usage::handle_usage,
   },
-  persist::{load_anchors, load_disappear, load_logs, load_redirects, load_vcs},
+  persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vcs},
   scheduler::{catch_up, scheduler},
   state::{BoxErr, State},
   stats::{daily_summary, load_stats},
@@ -68,14 +69,18 @@ async fn main() -> Result<(), BoxErr> {
     vcs: RwLock::new(load_vcs()),
     anchors: RwLock::new(load_anchors()),
     logs: RwLock::new(load_logs()),
+    autoreplies: RwLock::new(load_autoreplies()),
     tx,
     bot_id: me.id,
     stats,
   });
   tokio::spawn(daily_summary(Arc::clone(&http), Arc::clone(&state)));
   
-  let mut shard = Shard::new(ShardId::ONE, token, Intents::GUILD_MESSAGES);
-  println!("rusty online");
+  let mut shard = Shard::new(ShardId::ONE, token, Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT);
+  println!(
+    "rusty is now online!\n\
+    Logged in as []"
+  ); // TODO: Show logged in bot username ehre
 
   while let Some(item) = shard
     .next_event(EventTypeFlags::INTERACTION_CREATE | EventTypeFlags::MESSAGE_CREATE | EventTypeFlags::READY)
@@ -145,6 +150,18 @@ async fn main() -> Result<(), BoxErr> {
         if msg.author.id != state.bot_id && state.anchors.read().unwrap().contains_key(&msg.channel_id) {
           bump_anchor(Arc::clone(&http), Arc::clone(&state), msg.channel_id);
         }
+        if !msg.author.bot {
+          if let Some(guild_id) = msg.guild_id {
+            if let Some(body) = find_reply(&state, guild_id, &msg.content) {
+              let (http, channel) = (Arc::clone(&http), msg.channel_id);
+              tokio::spawn(async move {
+                if let Err(err) = send_reply(&http, channel, body).await {
+                  eprintln!("auto-reply failed in {channel}: {err}");
+                }
+              });
+            }
+          }
+        }
         if !msg.author.bot && msg.guild_id.is_some() && msg.mentions.iter().any(|m| m.id == state.bot_id) {
           let http = Arc::clone(&http);
           let state = Arc::clone(&state);
@@ -170,6 +187,9 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     if modal.custom_id == "anchor-timing" {
       return handle_anchor_timing_modal(&http, &state, &ev, modal).await;
     }
+    if modal.custom_id.starts_with("autoreply-") {
+      return handle_autoreply_modal(&http, &state, &ev, modal).await;
+    }
     return Ok(());
   }
   if let Some(InteractionData::MessageComponent(comp)) = &ev.data {
@@ -178,6 +198,9 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     }
     if comp.custom_id == "anchor-timing-open" {
       return handle_anchor_timing_button(&http, &state, &ev).await;
+    }
+    if comp.custom_id.starts_with("autoreply-") {
+      return handle_autoreply_component(&http, &state, &ev, comp).await;
     }
     return Ok(());
   }
@@ -192,6 +215,7 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     "anchor" => handle_anchor(&http, &state, &ev, cmd).await,
     "log-channel" => handle_log_channel(&http, &state, &ev, cmd).await,
     "usage" => handle_usage(&http, &state, &ev).await,
+    "autoreply" => handle_autoreply(&http, &state, &ev).await,
     "boom" => handle_boom(&http, &state, &ev, received, received_wall, gateway_latency).await,
     _ => Ok(()),
   }

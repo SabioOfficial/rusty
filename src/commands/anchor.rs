@@ -172,7 +172,7 @@ pub async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &Interact
   reply_ephemeral(http, ev, text).await
 }
 
-fn modal_text<'a>(c: &'a ModalInteractionComponent, id: &str) -> Option<&'a str> {
+pub fn modal_text<'a>(c: &'a ModalInteractionComponent, id: &str) -> Option<&'a str> {
   match c {
     ModalInteractionComponent::TextInput(t) if t.custom_id == id => Some(t.value.as_str()),
     ModalInteractionComponent::Label(l) => modal_text(&l.component, id),

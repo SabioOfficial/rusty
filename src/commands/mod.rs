@@ -1,4 +1,5 @@
 pub mod anchor;
+pub mod autoreply;
 pub mod boom;
 pub mod disappearing;
 pub mod log_channel;
