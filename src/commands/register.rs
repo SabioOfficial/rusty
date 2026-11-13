@@ -4,7 +4,7 @@ use twilight_model::{
   guild::Permissions,
 };
 use twilight_util::builder::command::{
-  ChannelBuilder, CommandBuilder, IntegerBuilder, StringBuilder, SubCommandBuilder, SubCommandGroupBuilder, UserBuilder,
+  BooleanBuilder, ChannelBuilder, CommandBuilder, IntegerBuilder, StringBuilder, SubCommandBuilder, SubCommandGroupBuilder, UserBuilder,
 };
 
 pub fn definitions() -> Vec<Command> {
@@ -108,6 +108,16 @@ pub fn definitions() -> Vec<Command> {
   )
   .default_member_permissions(Permissions::ADMINISTRATOR)
   .build();
+  let remindme = CommandBuilder::new("remindme", "Set a reminder", CommandType::ChatInput)
+    .option(StringBuilder::new("text", "What to remind you about").required(true).max_length(500))
+    .option(
+      StringBuilder::new("when", "e.g. 30m, 2h 15m, 18:30, 6:30pm, tomorrow 9am, 2026-11-12 18:26")
+        .required(true)
+        .max_length(60),
+    )
+    .option(BooleanBuilder::new("ping", "Whether I should ping you when the reminder goes off (default: yes)"))
+    .option(StringBuilder::new("timezone", "Your timezone, e.g. Europe/London or UTC+2. This saves for your account.").max_length(40))
+    .build();
 
-  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply]
+  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply, remindme]
 }

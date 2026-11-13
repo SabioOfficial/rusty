@@ -3,6 +3,7 @@ mod persist;
 mod scheduler;
 mod state;
 mod stats;
+mod timeparse;
 mod util;
 
 use std::{
@@ -22,21 +23,8 @@ use twilight_model::{
 
 use crate::{
   commands::{
-    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle},
-    autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply},
-    boom::handle_boom,
-    disappearing::handle_disappearing,
-    log_channel::handle_log_channel,
-    private_vc::{handle_private_vc, spawn_vc_timer},
-    redirect::{handle_message, handle_person_redirect},
-    register::definitions,
-    usage::handle_usage,
-  },
-  persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vcs},
-  scheduler::{catch_up, scheduler},
-  state::{BoxErr, State},
-  stats::{daily_summary, load_stats},
-  util::snowflake_ms,
+    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle}, autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply}, boom::handle_boom, disappearing::handle_disappearing, log_channel::handle_log_channel, private_vc::{handle_private_vc, spawn_vc_timer}, redirect::{handle_message, handle_person_redirect}, register::definitions, remindme::{handle_remindme, reminder_loop}, usage::handle_usage,
+  }, persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vcs}, scheduler::{catch_up, scheduler}, state::{BoxErr, State}, stats::{daily_summary, load_stats}, util::{load_reminders, load_timezones, snowflake_ms},
 };
 
 #[global_allocator]
@@ -70,11 +58,14 @@ async fn main() -> Result<(), BoxErr> {
     anchors: RwLock::new(load_anchors()),
     logs: RwLock::new(load_logs()),
     autoreplies: RwLock::new(load_autoreplies()),
+    reminders: RwLock::new(load_reminders()),
+    timezones: RwLock::new(load_timezones()),
     tx,
     bot_id: me.id,
     stats,
   });
   tokio::spawn(daily_summary(Arc::clone(&http), Arc::clone(&state)));
+  tokio::spawn(reminder_loop(Arc::clone(&http), Arc::clone(&state)));
   
   let mut shard = Shard::new(ShardId::ONE, token, Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT);
 
@@ -217,6 +208,7 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     "log-channel" => handle_log_channel(&http, &state, &ev, cmd).await,
     "usage" => handle_usage(&http, &state, &ev).await,
     "autoreply" => handle_autoreply(&http, &state, &ev).await,
+    "remindme" => handle_remindme(&http, &state, &ev, cmd).await,
     "boom" => handle_boom(&http, &state, &ev, received, received_wall, gateway_latency).await,
     _ => Ok(()),
   }

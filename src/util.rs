@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, time::{SystemTime, UNIX_EPOCH}};
 
 use twilight_http::{Client, error::ErrorType};
 use twilight_model::{
@@ -13,7 +13,7 @@ use twilight_model::{
 };
 use twilight_util::builder::interaction_response::ChannelMessageBuilder;
 
-use crate::state::{BoxErr, State};
+use crate::{persist::unescape, state::{BoxErr, Reminder, State}};
 
 pub fn now_ms() -> u64 {
   SystemTime::now()
@@ -124,6 +124,65 @@ pub fn opt_user(opts: &[CommandDataOption], name: &str) -> Option<Id<UserMarker>
 pub fn opt_channel(opts: &[CommandDataOption], name: &str) -> Option<Id<ChannelMarker>> {
   opts.iter().find_map(|o| match &o.value {
     CommandOptionValue::Channel(id) if o.name == name => Some(*id),
+    _ => None,
+  })
+}
+
+pub fn load_reminders() -> Vec<Reminder> {
+  let mut list = Vec::new();
+  if let Ok(text) = std::fs::read_to_string("reminders.txt") {
+    for line in text.lines() {
+      let mut p = line.splitn(6, ' ');
+      if let (Some(f), Some(c), Some(u), Some(ch), Some(ping), Some(body)) = (p.next(), p.next(), p.next(), p.next(), p.next(), p.next()) {
+        if let (Ok(f), Ok(c), Ok(u), Ok(ch)) = (f.parse::<u64>(), c.parse::<u64>(), u.parse::<u64>(), ch.parse::<u64>()) {
+          if let (Some(user), Some(channel)) = (Id::new_checked(u), Id::new_checked(ch)) {
+            list.push(Reminder { user, channel, fire_ms: f, created_ms: c, ping: ping == "1", text: unescape(body) });
+          }
+        }
+      }
+    }
+  }
+  list
+}
+
+pub fn save_reminders(list: &[Reminder]) {
+  let text: String = list
+    .iter()
+    .map(|r| {
+      let body = r.text.replace('\\', "\\\\").replace('\r', "").replace('\n', "\\n");
+      format!("{} {} {} {} {} {}\n", r.fire_ms, r.created_ms, r.user.get(), r.channel.get(), r.ping as u8, body)
+    })
+    .collect();
+  if let Err(err) = std::fs::write("reminders.txt", text) {
+    eprintln!("failed to save reminders.txt: {err}");
+  }
+}
+
+pub fn load_timezones() -> HashMap<Id<UserMarker>, String> {
+  let mut map = HashMap::new();
+  if let Ok(text) = std::fs::read_to_string("timezones.txt") {
+    for line in text.lines() {
+      let mut p = line.split_whitespace();
+      if let (Some(u), Some(zone)) = (p.next(), p.next()) {
+        if let Some(u) = u.parse::<u64>().ok().and_then(Id::new_checked) {
+          map.insert(u, zone.to_string());
+        }
+      }
+    }
+  }
+  map
+}
+
+pub fn save_timezones(map: &HashMap<Id<UserMarker>, String>) {
+  let text: String = map.iter().map(|(u, z)| format!("{} {}\n", u.get(), z)).collect();
+  if let Err(err) = std::fs::write("timezones.txt", text) {
+    eprintln!("failed to save timezones.txt: {err}");
+  }
+}
+
+pub fn opt_bool(opts: &[CommandDataOption], name: &str) -> Option<bool> {
+  opts.iter().find_map(|o| match &o.value {
+    CommandOptionValue::Boolean(b) if o.name == name => Some(*b),
     _ => None,
   })
 }

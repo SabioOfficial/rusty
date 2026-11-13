@@ -36,6 +36,16 @@ pub struct Anchor {
   pub pending: u64,
 }
 
+#[derive(Clone)]
+pub struct Reminder {
+  pub user: Id<UserMarker>,
+  pub channel: Id<ChannelMarker>,
+  pub fire_ms: u64,
+  pub created_ms: u64,
+  pub ping: bool,
+  pub text: String,
+}
+
 pub struct State {
   pub redirects: RwLock<HashMap<Id<GuildMarker>, Id<UserMarker>>>,
   pub disappear: RwLock<HashMap<Id<ChannelMarker>, Disappear>>,
@@ -43,6 +53,8 @@ pub struct State {
   pub anchors: RwLock<HashMap<Id<ChannelMarker>, Anchor>>,
   pub logs: RwLock<HashMap<Id<GuildMarker>, Id<ChannelMarker>>>,
   pub autoreplies: RwLock<HashMap<Id<GuildMarker>, HashMap<String, String>>>,
+  pub reminders: RwLock<Vec<Reminder>>,
+  pub timezones: RwLock<HashMap<Id<UserMarker>, String>>,
   pub tx: mpsc::UnboundedSender<Job>,
   pub bot_id: Id<UserMarker>,
   pub stats: Arc<Stats>,
