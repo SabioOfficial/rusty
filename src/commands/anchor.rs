@@ -99,6 +99,7 @@ pub fn bump_anchor(http: Arc<Client>, state: Arc<State>, channel: Id<ChannelMark
   });
 }
 
+#[allow(deprecated)]
 pub async fn handle_anchor(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
   let channel = ev.channel.as_ref().map(|c| c.id);
   let sub = cmd.options.first();
@@ -316,6 +317,7 @@ fn field<'a>(modal: &'a ModalInteractionData, id: &str) -> &'a str {
   modal.components.iter().find_map(|c| modal_text(c, id)).unwrap_or_default()
 }
 
+#[allow(deprecated)]
 fn text_field(label: &str, description: &str, id: &str, placeholder: &str, max: u16, value: String) -> Component {
   Component::Label(Label {
     id: None,
