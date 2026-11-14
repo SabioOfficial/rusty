@@ -2,28 +2,19 @@ use std::{sync::{Arc, atomic::Ordering::Relaxed}, time::Duration};
 
 use twilight_http::{Client, error::ErrorType};
 use twilight_model::{
-  application::interaction::application_command::{CommandData, CommandOptionValue},
-  channel::{
-    ChannelType,
-    permission_overwrite::{
+  application::interaction::{application_command::{CommandData, CommandOptionValue}, message_component::MessageComponentInteractionData}, channel::{
+    ChannelType, message::{Component, MessageFlags, component::{ButtonStyle, SelectMenuType}}, permission_overwrite::{
       PermissionOverwrite as ChannelOverwrite, PermissionOverwriteType as ChannelOverwriteType,
     },
-  },
-  gateway::payload::incoming::InteractionCreate,
-  guild::Permissions,
-  http::{
-    permission_overwrite::{PermissionOverwrite, PermissionOverwriteType},
-  },
-  id::{
+  }, gateway::payload::incoming::InteractionCreate, guild::Permissions, http::permission_overwrite::{PermissionOverwrite, PermissionOverwriteType}, id::{
     Id,
     marker::{ChannelMarker, GenericMarker, UserMarker},
   },
 };
+use twilight_util::builder::{interaction_response::{ChannelMessageBuilder, UpdateMessageBuilder}, message::{ActionRowBuilder, ButtonBuilder, SelectMenuBuilder}};
 
 use crate::{
-  persist::save_vcs,
-  state::{BoxErr, PrivateVc, State},
-  util::{deferred_ephemeral, log_event, now_ms, opt_channel, opt_int, opt_str, opt_user, unit_secs},
+  persist::{save_vc_categories, save_vcs}, state::{BoxErr, PrivateVc, State}, util::{deferred_ephemeral, is_admin, log_event, now_ms, opt_channel, opt_int, opt_str, opt_user, reply_ephemeral, unit_secs, who},
 };
 
 pub fn spawn_vc_timer(http: Arc<Client>, state: Arc<State>, channel: Id<ChannelMarker>, expires_ms: u64) {
@@ -75,6 +66,9 @@ async fn send_dm(http: &Client, user: Id<UserMarker>, text: &str) -> Result<(), 
 }
 
 pub async fn handle_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &InteractionCreate, cmd: &CommandData) -> Result<(), BoxErr> {
+  if cmd.options.first().is_some_and(|o| o.name == "settings") {
+    return handle_vc_settings(http, state, ev).await;
+  }
   let iclient = http.interaction(ev.application_id);
   let ack = deferred_ephemeral();
   iclient.create_response(ev.id, &ev.token, &ack).await?;
@@ -87,6 +81,98 @@ pub async fn handle_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &Inte
     }
   };
   iclient.update_response(&ev.token).content(Some(&text)).await?;
+  Ok(())
+}
+
+fn settings_view(current: Option<Id<ChannelMarker>>) -> (String, Vec<Component>) {
+  let shown = match current {
+    Some(c) => format!("<#{c}>"),
+    None => "None".to_string(),
+  };
+  let content = format!(
+    "## Private VC settings\n\
+    Category: {shown}\n\
+    -# New private VCs will be created there. Existing VCs are not affected by this change."
+  );
+  let pick = SelectMenuBuilder::new("vc-category-pick", SelectMenuType::Channel)
+    .channel_types(vec![ChannelType::GuildCategory])
+    .placeholder("Choose a category...")
+    .build();
+  let clear = ButtonBuilder::new(ButtonStyle::Secondary)
+    .custom_id("vc-category-clear")
+    .label("Use no category")
+    .disabled(current.is_none())
+    .build();
+  let components: Vec<Component> = vec![
+    ActionRowBuilder::new().component(pick).build().into(),
+    ActionRowBuilder::new().component(clear).build().into(),
+  ];
+  (content, components)
+}
+
+pub async fn handle_vc_settings(http: &Client, state: &State, ev: &InteractionCreate) -> Result<(), BoxErr> {
+  let Some(guild) = ev.guild_id else {
+    return reply_ephemeral(http, ev, "Use `/create-private-vc settings` in a **server**.".into()).await;
+  };
+  if !is_admin(ev) {
+    return reply_ephemeral(http, ev, "You're not an administrator!".into()).await;
+  }
+  let current = state.vc_categories.read().unwrap().get(&guild).copied();
+  let (content, components) = settings_view(current);
+  let response = ChannelMessageBuilder::new()
+    .content(content)
+    .components(components)
+    .flags(MessageFlags::EPHEMERAL)
+    .build();
+  http.interaction(ev.application_id)
+    .create_response(ev.id, &ev.token, &response)
+    .await?;
+  Ok(())
+}
+
+pub async fn handle_vc_settings_component(http: &Client, state: &State, ev: &InteractionCreate, comp: &MessageComponentInteractionData) -> Result<(), BoxErr> {
+  let Some(guild) = ev.guild_id else {
+    return Ok(());
+  };
+  if !is_admin(ev) {
+    return reply_ephemeral(http, ev, "You don't have administrator permissions.".into()).await;
+  }
+
+  let current: Option<Id<ChannelMarker>> = match comp.custom_id.as_str() {
+    "vc-category-pick" => {
+      let picked: Option<Id<ChannelMarker>> = comp
+        .values
+        .first()
+        .and_then(|v| v.parse::<u64>().ok())
+        .and_then(Id::new_checked);
+      let Some(category) = picked else {
+        return Ok(());
+      };
+      {
+        let mut map = state.vc_categories.write().unwrap();
+        map.insert(guild, category);
+        save_vc_categories(&map);
+      }
+      log_event(http, state, Some(guild), format!("{} set the private VC category to <#{category}>.", who(ev))).await;
+      Some(category)
+    }
+    "vc-category-clear" => {
+      {
+        let mut map = state.vc_categories.write().unwrap();
+        map.remove(&guild);
+        save_vc_categories(&map);
+      }
+      log_event(http, state, Some(guild), format!("{} reset the private VC category.", who(ev))).await;
+      None
+    }
+    _ => return Ok(()),
+  };
+
+  let (content, components) = settings_view(current);
+  let response = UpdateMessageBuilder::new().content(content).components(components).build();
+  http.interaction(ev.application_id)
+    .create_response(ev.id, &ev.token, &response)
+    .await?;
   Ok(())
 }
 
@@ -141,13 +227,30 @@ async fn run_private_vc(http: &Arc<Client>, state: &Arc<State>, ev: &Interaction
           kind: ChannelOverwriteType::Member,
         },
       ];
-      let channel = http
-        .create_guild_channel(guild_id, name)
-        .kind(ChannelType::GuildVoice)
-        .permission_overwrites(&overwrites)
-        .await?
-        .model()
-        .await?;
+      let parent = state.vc_categories.read().unwrap().get(&guild_id).copied();
+      let mut created = None;
+      if let Some(parent) = parent {
+        match http
+          .create_guild_channel(guild_id, name)
+          .kind(ChannelType::GuildVoice)
+          .permission_overwrites(&overwrites)
+          .parent_id(parent)
+          .await
+        {
+          Ok(resp) => created = Some(resp.model().await?),
+          Err(err) => eprintln!("private vc category {parent} unusable, creating without it: {err}"),
+        }
+      }
+      let channel = match created {
+        Some(c) => c,
+        None => http
+          .create_guild_channel(guild_id, name)
+          .kind(ChannelType::GuildVoice)
+          .permission_overwrites(&overwrites)
+          .await?
+          .model()
+          .await?,
+      };
       
       state.stats.vcs.fetch_add(1, Relaxed);
       let expires_ms = now_ms() + secs * 1000;

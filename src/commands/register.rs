@@ -74,6 +74,7 @@ pub fn definitions() -> Vec<Command> {
       SubCommandBuilder::new("close", "Delete the voice channel now").option(vc_opt()),
     ]),
   )
+  .option(SubCommandBuilder::new("settings", "Change private VC settings for this server"))
   .build();
   let anchor = CommandBuilder::new(
     "anchor",

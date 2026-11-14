@@ -2,11 +2,7 @@ use std::{collections::HashMap, time::{SystemTime, UNIX_EPOCH}};
 
 use twilight_http::{Client, error::ErrorType};
 use twilight_model::{
-  application::interaction::application_command::{CommandDataOption, CommandOptionValue},
-  channel::message::{AllowedMentions, MessageFlags},
-  gateway::payload::incoming::InteractionCreate,
-  http::interaction::{InteractionResponse, InteractionResponseData, InteractionResponseType},
-  id::{
+  application::interaction::application_command::{CommandDataOption, CommandOptionValue}, channel::message::{AllowedMentions, MessageFlags}, gateway::payload::incoming::InteractionCreate, guild::Permissions, http::interaction::{InteractionResponse, InteractionResponseData, InteractionResponseType}, id::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
   },
@@ -185,4 +181,11 @@ pub fn opt_bool(opts: &[CommandDataOption], name: &str) -> Option<bool> {
     CommandOptionValue::Boolean(b) if o.name == name => Some(*b),
     _ => None,
   })
+}
+
+pub fn is_admin(ev: &InteractionCreate) -> bool {
+  ev.member
+    .as_ref()
+    .and_then(|m| m.permissions)
+    .is_some_and(|p| p.contains(Permissions::ADMINISTRATOR))
 }

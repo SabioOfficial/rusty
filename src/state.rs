@@ -52,6 +52,7 @@ pub struct State {
   pub vcs: RwLock<HashMap<Id<ChannelMarker>, PrivateVc>>,
   pub anchors: RwLock<HashMap<Id<ChannelMarker>, Anchor>>,
   pub logs: RwLock<HashMap<Id<GuildMarker>, Id<ChannelMarker>>>,
+  pub vc_categories: RwLock<HashMap<Id<GuildMarker>, Id<ChannelMarker>>>,
   pub autoreplies: RwLock<HashMap<Id<GuildMarker>, HashMap<String, String>>>,
   pub reminders: RwLock<Vec<Reminder>>,
   pub timezones: RwLock<HashMap<Id<UserMarker>, String>>,

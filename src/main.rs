@@ -23,8 +23,8 @@ use twilight_model::{
 
 use crate::{
   commands::{
-    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle}, autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply}, boom::handle_boom, disappearing::handle_disappearing, log_channel::handle_log_channel, private_vc::{handle_private_vc, spawn_vc_timer}, redirect::{handle_message, handle_person_redirect}, register::definitions, remindme::{handle_remindme, reminder_loop}, usage::handle_usage,
-  }, persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vcs}, scheduler::{catch_up, scheduler}, state::{BoxErr, State}, stats::{daily_summary, load_stats}, util::{load_reminders, load_timezones, snowflake_ms},
+    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle}, autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply}, boom::handle_boom, disappearing::handle_disappearing, log_channel::handle_log_channel, private_vc::{handle_private_vc, handle_vc_settings_component, spawn_vc_timer}, redirect::{handle_message, handle_person_redirect}, register::definitions, remindme::{handle_remindme, reminder_loop}, usage::handle_usage,
+  }, persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vc_categories, load_vcs}, scheduler::{catch_up, scheduler}, state::{BoxErr, State}, stats::{daily_summary, load_stats}, util::{load_reminders, load_timezones, snowflake_ms},
 };
 
 #[global_allocator]
@@ -57,6 +57,7 @@ async fn main() -> Result<(), BoxErr> {
     vcs: RwLock::new(load_vcs()),
     anchors: RwLock::new(load_anchors()),
     logs: RwLock::new(load_logs()),
+    vc_categories: RwLock::new(load_vc_categories()),
     autoreplies: RwLock::new(load_autoreplies()),
     reminders: RwLock::new(load_reminders()),
     timezones: RwLock::new(load_timezones()),
@@ -193,6 +194,9 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     }
     if comp.custom_id.starts_with("autoreply-") {
       return handle_autoreply_component(&http, &state, &ev, comp).await;
+    }
+    if comp.custom_id.starts_with("vc-category-") {
+      return handle_vc_settings_component(&http, &state, &ev, comp).await;
     }
     return Ok(());
   }

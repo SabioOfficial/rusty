@@ -199,3 +199,30 @@ pub fn save_autoreplies(map: &HashMap<Id<GuildMarker>, HashMap<String, String>>)
     eprintln!("failed to save autoreplies.txt: {err}");
   }
 }
+
+pub fn load_vc_categories() -> HashMap<Id<GuildMarker>, Id<ChannelMarker>> {
+  let mut map = HashMap::new();
+  if let Ok(text) = std::fs::read_to_string("vc_categories.txt") {
+    for line in text.lines() {
+      let mut p = line.split_whitespace();
+      if let (Some(g), Some(c)) = (p.next(), p.next()) {
+        if let (Ok(g), Ok(c)) = (g.parse::<u64>(), c.parse::<u64>()) {
+          if let (Some(g), Some(c)) = (Id::new_checked(g), Id::new_checked(c)) {
+            map.insert(g, c);
+          }
+        }
+      }
+    }
+  }
+  map
+}
+
+pub fn save_vc_categories(map: &HashMap<Id<GuildMarker>, Id<ChannelMarker>>) {
+  let text: String = map
+    .iter()
+    .map(|(g, c)| format!("{} {}\n", g.get(), c.get()))
+    .collect();
+  if let Err(err) = std::fs::write("vc_categories.txt", text) {
+    eprintln!("failed to save vc_categories.txt: {err}");
+  }
+}
