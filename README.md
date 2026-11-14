@@ -127,6 +127,6 @@ Everything planned for the next release!
 - [ ] Make it easier to input the token
 - [X] Customizable level of inactivity for the anchor (how many messages, how long)
 - [X] Custom !! thingy
-- [ ] Private vcs should have an admin-only setting to change what category the vcs spawn in
+- [X] Private vcs should have an admin-only setting to change what category the vcs spawn in
 - [X] Stop using InteractionResponseDataBuilder as it is deprecated
 - [X] Remind me command 
