@@ -8,3 +8,4 @@ pub mod redirect;
 pub mod register;
 pub mod remindme;
 pub mod usage;
+pub mod welcome;

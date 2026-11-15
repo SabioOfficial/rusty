@@ -46,6 +46,19 @@ pub struct Reminder {
   pub text: String,
 }
 
+#[derive(Clone)]
+pub struct Welcome {
+  pub channel: Option<Id<ChannelMarker>>,
+  pub text: String,
+  pub enabled: bool,
+}
+
+impl Default for Welcome {
+  fn default() -> Self {
+    Self { channel: None, text: "Welcome to {server}, {user}!".to_string(), enabled: false }
+  }
+}
+
 pub struct State {
   pub redirects: RwLock<HashMap<Id<GuildMarker>, Id<UserMarker>>>,
   pub disappear: RwLock<HashMap<Id<ChannelMarker>, Disappear>>,
@@ -56,6 +69,7 @@ pub struct State {
   pub autoreplies: RwLock<HashMap<Id<GuildMarker>, HashMap<String, String>>>,
   pub reminders: RwLock<Vec<Reminder>>,
   pub timezones: RwLock<HashMap<Id<UserMarker>, String>>,
+  pub welcomes: RwLock<HashMap<Id<GuildMarker>, Welcome>>,
   pub tx: mpsc::UnboundedSender<Job>,
   pub bot_id: Id<UserMarker>,
   pub stats: Arc<Stats>,

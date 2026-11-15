@@ -23,8 +23,8 @@ use twilight_model::{
 
 use crate::{
   commands::{
-    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle}, autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply}, boom::handle_boom, disappearing::handle_disappearing, log_channel::handle_log_channel, private_vc::{handle_private_vc, handle_vc_settings_component, spawn_vc_timer}, redirect::{handle_message, handle_person_redirect}, register::definitions, remindme::{handle_remindme, reminder_loop}, usage::handle_usage,
-  }, persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vc_categories, load_vcs}, scheduler::{catch_up, scheduler}, state::{BoxErr, State}, stats::{daily_summary, load_stats}, util::{load_reminders, load_timezones, snowflake_ms},
+    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle}, autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply}, boom::handle_boom, disappearing::handle_disappearing, log_channel::handle_log_channel, private_vc::{handle_private_vc, handle_vc_settings_component, spawn_vc_timer}, redirect::{handle_message, handle_person_redirect}, register::definitions, remindme::{handle_remindme, reminder_loop}, usage::handle_usage, welcome::{handle_welcome, handle_welcome_component, handle_welcome_modal, send_welcome},
+  }, persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vc_categories, load_vcs, load_welcomes}, scheduler::{catch_up, scheduler}, state::{BoxErr, State}, stats::{daily_summary, load_stats}, util::{load_reminders, load_timezones, snowflake_ms},
 };
 
 #[global_allocator]
@@ -61,6 +61,7 @@ async fn main() -> Result<(), BoxErr> {
     autoreplies: RwLock::new(load_autoreplies()),
     reminders: RwLock::new(load_reminders()),
     timezones: RwLock::new(load_timezones()),
+    welcomes: RwLock::new(load_welcomes()),
     tx,
     bot_id: me.id,
     stats,
@@ -68,10 +69,10 @@ async fn main() -> Result<(), BoxErr> {
   tokio::spawn(daily_summary(Arc::clone(&http), Arc::clone(&state)));
   tokio::spawn(reminder_loop(Arc::clone(&http), Arc::clone(&state)));
   
-  let mut shard = Shard::new(ShardId::ONE, token, Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT);
+  let mut shard = Shard::new(ShardId::ONE, token, Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT | Intents::GUILD_MEMBERS);
 
   while let Some(item) = shard
-    .next_event(EventTypeFlags::INTERACTION_CREATE | EventTypeFlags::MESSAGE_CREATE | EventTypeFlags::READY)
+    .next_event(EventTypeFlags::INTERACTION_CREATE | EventTypeFlags::MESSAGE_CREATE | EventTypeFlags::READY | EventTypeFlags::MEMBER_ADD)
     .await
   {
     let received = Instant::now();
@@ -165,6 +166,15 @@ async fn main() -> Result<(), BoxErr> {
           });
         }
       }
+      Event::MemberAdd(member) => {
+        if !member.user.bot {
+          let (http, state) = (Arc::clone(&http), Arc::clone(&state));
+          let (guild, user) = (member.guild_id, member.user.id);
+          tokio::spawn(async move {
+            send_welcome(&http, &state, guild, user).await;
+          });
+        }
+      }
       _ => {}
     }
   }
@@ -180,6 +190,9 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     if modal.custom_id == "anchor-timing" {
       return handle_anchor_timing_modal(&http, &state, &ev, modal).await;
     }
+    if modal.custom_id == "welcome-text" {
+      return handle_welcome_modal(&http, &state, &ev, modal).await;
+    }
     if modal.custom_id.starts_with("autoreply-") {
       return handle_autoreply_modal(&http, &state, &ev, modal).await;
     }
@@ -194,6 +207,9 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     }
     if comp.custom_id.starts_with("autoreply-") {
       return handle_autoreply_component(&http, &state, &ev, comp).await;
+    }
+    if comp.custom_id.starts_with("welcome-") {
+      return handle_welcome_component(&http, &state, &ev, comp).await;
     }
     if comp.custom_id.starts_with("vc-category-") {
       return handle_vc_settings_component(&http, &state, &ev, comp).await;
@@ -212,6 +228,7 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     "log-channel" => handle_log_channel(&http, &state, &ev, cmd).await,
     "usage" => handle_usage(&http, &state, &ev).await,
     "autoreply" => handle_autoreply(&http, &state, &ev).await,
+    "welcome" => handle_welcome(&http, &state, &ev).await,
     "remindme" => handle_remindme(&http, &state, &ev, cmd).await,
     "boom" => handle_boom(&http, &state, &ev, received, received_wall, gateway_latency).await,
     _ => Ok(()),

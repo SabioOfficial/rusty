@@ -5,7 +5,7 @@ use twilight_model::id::{
   marker::{ChannelMarker, GuildMarker, UserMarker},
 };
 
-use crate::state::{Anchor, Disappear, PrivateVc};
+use crate::state::{Anchor, Disappear, PrivateVc, Welcome};
 
 pub fn load_redirects() -> HashMap<Id<GuildMarker>, Id<UserMarker>> {
   let mut map = HashMap::new();
@@ -224,5 +224,35 @@ pub fn save_vc_categories(map: &HashMap<Id<GuildMarker>, Id<ChannelMarker>>) {
     .collect();
   if let Err(err) = std::fs::write("vc_categories.txt", text) {
     eprintln!("failed to save vc_categories.txt: {err}");
+  }
+}
+
+pub fn load_welcomes() -> HashMap<Id<GuildMarker>, Welcome> {
+  let mut map = HashMap::new();
+  if let Ok(text) = std::fs::read_to_string("welcome.txt") {
+    for line in text.lines() {
+      let mut p = line.splitn(4, ' ');
+      if let (Some(g), Some(c), Some(en), Some(body)) = (p.next(), p.next(), p.next(), p.next()) {
+        let guild: Option<Id<GuildMarker>> = g.parse::<u64>().ok().and_then(Id::new_checked);
+        let channel: Option<Id<ChannelMarker>> = c.parse::<u64>().ok().and_then(Id::new_checked);
+        if let Some(guild) = guild {
+          map.insert(guild, Welcome { channel, text: unescape(body), enabled: en == "1" });
+        }
+      }
+    }
+  }
+  map
+}
+
+pub fn save_welcomes(map: &HashMap<Id<GuildMarker>, Welcome>) {
+  let text: String = map
+    .iter()
+    .map(|(g, w)| {
+      let body = w.text.replace('\\', "\\\\").replace('\r', "").replace('\n', "\\n");
+      format!("{} {} {} {}\n", g.get(), w.channel.map(|c| c.get()).unwrap_or(0), w.enabled as u8, body)
+    })
+    .collect();
+  if let Err(err) = std::fs::write("welcome.txt", text) {
+    eprintln!("failed to save welcome.txt: {err}");
   }
 }

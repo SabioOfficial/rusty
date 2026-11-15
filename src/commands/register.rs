@@ -119,6 +119,9 @@ pub fn definitions() -> Vec<Command> {
     .option(BooleanBuilder::new("ping", "Whether I should ping you when the reminder goes off (default: yes)"))
     .option(StringBuilder::new("timezone", "Your timezone, e.g. Europe/London or UTC+2. This saves for your account.").max_length(40))
     .build();
+  let welcome = CommandBuilder::new("welcome", "Setup a custom join message for new members", CommandType::ChatInput)
+    .default_member_permissions(Permissions::ADMINISTRATOR)
+    .build();
 
-  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply, remindme]
+  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply, remindme, welcome]
 }
