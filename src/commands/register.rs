@@ -122,6 +122,7 @@ pub fn definitions() -> Vec<Command> {
   let welcome = CommandBuilder::new("welcome", "Setup a custom join message for new members", CommandType::ChatInput)
     .default_member_permissions(Permissions::ADMINISTRATOR)
     .build();
+  let serverinfo = CommandBuilder::new("serverinfo", "Show details about this server", CommandType::ChatInput).build();
 
-  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply, remindme, welcome]
+  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply, serverinfo, remindme, welcome]
 }

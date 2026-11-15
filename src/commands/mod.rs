@@ -7,5 +7,6 @@ pub mod private_vc;
 pub mod redirect;
 pub mod register;
 pub mod remindme;
+pub mod serverinfo;
 pub mod usage;
 pub mod welcome;
