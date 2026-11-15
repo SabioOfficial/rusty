@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::time::MissedTickBehavior;
 use twilight_http::Client;
 use twilight_model::{application::interaction::application_command::CommandData, channel::message::AllowedMentions, gateway::payload::incoming::InteractionCreate};
 
