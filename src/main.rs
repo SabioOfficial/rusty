@@ -23,7 +23,7 @@ use twilight_model::{
 
 use crate::{
   commands::{
-    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle}, autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply}, boom::handle_boom, disappearing::handle_disappearing, log_channel::handle_log_channel, private_vc::{handle_private_vc, handle_vc_settings_component, spawn_vc_timer}, redirect::{handle_message, handle_person_redirect}, register::definitions, serverinfo::handle_serverinfo, remindme::{handle_remindme, reminder_loop}, usage::handle_usage, welcome::{handle_welcome, handle_welcome_component, handle_welcome_modal, send_welcome},
+    anchor::{bump_anchor, handle_anchor, handle_anchor_modal, handle_anchor_timing_button, handle_anchor_timing_modal, handle_anchor_toggle}, autoreply::{find_reply, handle_autoreply, handle_autoreply_component, handle_autoreply_modal, send_reply}, boom::handle_boom, disappearing::handle_disappearing, log_channel::handle_log_channel, private_vc::{handle_private_vc, handle_vc_settings_component, spawn_vc_timer}, purge::handle_purge, redirect::{handle_message, handle_person_redirect}, register::definitions, remindme::{handle_remindme, reminder_loop}, serverinfo::handle_serverinfo, usage::handle_usage, welcome::{handle_welcome, handle_welcome_component, handle_welcome_modal, send_welcome},
   }, persist::{load_anchors, load_autoreplies, load_disappear, load_logs, load_redirects, load_vc_categories, load_vcs, load_welcomes}, scheduler::{catch_up, scheduler}, state::{BoxErr, State}, stats::{daily_summary, load_stats}, util::{load_reminders, load_timezones, snowflake_ms},
 };
 
@@ -229,6 +229,7 @@ async fn handle(http: Arc<Client>, state: Arc<State>, ev: Box<InteractionCreate>
     "usage" => handle_usage(&http, &state, &ev).await,
     "autoreply" => handle_autoreply(&http, &state, &ev).await,
     "serverinfo" => handle_serverinfo(&http, &ev).await,
+    "purge" => handle_purge(&http, &state, &ev, cmd).await,
     "welcome" => handle_welcome(&http, &state, &ev).await,
     "remindme" => handle_remindme(&http, &state, &ev, cmd).await,
     "boom" => handle_boom(&http, &state, &ev, received, received_wall, gateway_latency).await,

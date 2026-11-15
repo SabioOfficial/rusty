@@ -123,6 +123,15 @@ pub fn definitions() -> Vec<Command> {
     .default_member_permissions(Permissions::ADMINISTRATOR)
     .build();
   let serverinfo = CommandBuilder::new("serverinfo", "Show details about this server", CommandType::ChatInput).build();
+  let purge = CommandBuilder::new("purge", "Bulk-delete recent messages in this channel", CommandType::ChatInput)
+    .default_member_permissions(Permissions::ADMINISTRATOR)
+    .option(
+      IntegerBuilder::new("amount", "How many recent messages to delete (1-100)")
+        .required(true)
+        .min_value(1)
+        .max_value(100),
+    )
+    .build();
 
-  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply, serverinfo, remindme, welcome]
+  vec![boom, redirect, disappearing, private_vc, anchor, log_channel, usage, autoreply, serverinfo, remindme, welcome, purge]
 }
