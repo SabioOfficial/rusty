@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, sync::{Arc, RwLock}};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use twilight_model::{id::{
   Id,
   marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
@@ -68,6 +68,7 @@ pub struct State {
   pub vc_categories: RwLock<HashMap<Id<GuildMarker>, Id<ChannelMarker>>>,
   pub autoreplies: RwLock<HashMap<Id<GuildMarker>, HashMap<String, String>>>,
   pub reminders: RwLock<Vec<Reminder>>,
+  pub reminder_wake: Notify,
   pub timezones: RwLock<HashMap<Id<UserMarker>, String>>,
   pub welcomes: RwLock<HashMap<Id<GuildMarker>, Welcome>>,
   pub tx: mpsc::UnboundedSender<Job>,

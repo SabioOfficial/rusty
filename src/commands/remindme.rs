@@ -54,7 +54,7 @@ pub async fn handle_remindme(http: &Client, state: &State, ev: &InteractionCreat
   if !added {
     return reply_ephemeral(http, ev, format!("You already have 50 pending reminders. You cannot add anymore until one goes off.")).await;
   }
-
+  state.reminder_wake.notify_one();
   let ts = fire_ms / 1000;
   let place = if ev.guild_id.is_some() { format!("in <#{channel}>") } else { "here in this DM".to_string() };
   let ping_note = if ping { "I'll ping you." } else { "I won't ping you." };
@@ -62,10 +62,23 @@ pub async fn handle_remindme(http: &Client, state: &State, ev: &InteractionCreat
 }
 
 pub async fn reminder_loop(http: Arc<Client>, state: Arc<State>) {
-  let mut tick = tokio::time::interval(Duration::from_secs(1));
-  tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
   loop {
-    tick.tick().await;
+    let next = state.reminders.read().unwrap().iter().map(|r| r.fire_ms).min();
+    match next {
+      None => {
+        state.reminder_wake.notified().await;
+        continue;
+      }
+      Some(at) => {
+        let wait = Duration::from_millis(at.saturating_sub(now_ms())).min(Duration::from_secs(3600));
+        if !wait.is_zero() {
+          tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = state.reminder_wake.notified() => continue,
+          }
+        }
+      }
+    }
     let now = now_ms();
     let due: Vec<Reminder> = {
       let mut list = state.reminders.write().unwrap();

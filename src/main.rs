@@ -60,6 +60,7 @@ async fn main() -> Result<(), BoxErr> {
     vc_categories: RwLock::new(load_vc_categories()),
     autoreplies: RwLock::new(load_autoreplies()),
     reminders: RwLock::new(load_reminders()),
+    reminder_wake: tokio::sync::Notify::new(),
     timezones: RwLock::new(load_timezones()),
     welcomes: RwLock::new(load_welcomes()),
     tx,
